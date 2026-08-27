@@ -50,6 +50,9 @@ Build the small graphical launcher with:
 Place `Rott94CoopLauncher.exe` beside `Rott94.Windows.Release.exe` in the
 portable game folder on both computers. The host clicks **HOST** and gives the
 displayed LAN address to the second player, who enters it and clicks **JOIN**.
+If the portable folder has no registered data yet, the launcher imports the
+three required files from a default Ludicrous Edition Steam installation. It
+offers a folder picker when Steam is installed in another library location.
 Allow the game through Windows Firewall on Private networks. No router port
 forwarding is required when both computers are on the same LAN.
 

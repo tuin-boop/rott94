@@ -133,7 +133,6 @@ namespace Rott94CoopLauncher
         {
             string folder = Application.StartupPath;
             string game = System.IO.Path.Combine(folder, GameExe);
-            string gameData = System.IO.Path.Combine(folder, "assets", "darkwar.wad");
             if (!System.IO.File.Exists(game))
             {
                 MessageBox.Show(this,
@@ -142,14 +141,8 @@ namespace Rott94CoopLauncher
                 return false;
             }
 
-            if (!System.IO.File.Exists(gameData))
-            {
-                MessageBox.Show(this,
-                    "The registered game data was not found.\n\nPlace DARKWAR.WAD in:\n" +
-                    System.IO.Path.Combine(folder, "assets"),
-                    "Game data not found", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            if (!EnsureGameData(folder))
                 return false;
-            }
 
             try
             {
@@ -164,6 +157,58 @@ namespace Rott94CoopLauncher
             {
                 MessageBox.Show(this, ex.Message, "Could not start ROTT94",
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return false;
+            }
+        }
+
+        private bool EnsureGameData(string gameFolder)
+        {
+            string destination = System.IO.Path.Combine(gameFolder, "assets");
+            string destinationWad = System.IO.Path.Combine(destination, "darkwar.wad");
+            if (System.IO.File.Exists(destinationWad))
+                return true;
+
+            string steamAssets = System.IO.Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
+                "Steam", "steamapps", "common", "Rise of the Triad - Ludicrous Edition", "assets");
+            string source = steamAssets;
+
+            if (!System.IO.File.Exists(System.IO.Path.Combine(source, "darkwar.wad")))
+            {
+                using (FolderBrowserDialog picker = new FolderBrowserDialog())
+                {
+                    picker.Description = "Select the Ludicrous Edition assets folder containing DARKWAR.WAD.";
+                    picker.ShowNewFolderButton = false;
+                    if (picker.ShowDialog(this) != DialogResult.OK)
+                        return false;
+                    source = picker.SelectedPath;
+                }
+            }
+
+            if (!System.IO.File.Exists(System.IO.Path.Combine(source, "darkwar.wad")))
+            {
+                MessageBox.Show(this, "DARKWAR.WAD was not found in the selected folder.",
+                    "Game data not found", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return false;
+            }
+
+            try
+            {
+                System.IO.Directory.CreateDirectory(destination);
+                string[] files = { "darkwar.wad", "darkwar.rtl", "remote1.rts" };
+                foreach (string file in files)
+                {
+                    string sourceFile = System.IO.Path.Combine(source, file);
+                    if (System.IO.File.Exists(sourceFile))
+                        System.IO.File.Copy(sourceFile, System.IO.Path.Combine(destination, file), true);
+                }
+                SetStatus("Registered game data imported from the Ludicrous Edition.");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, "Could not copy the game data:\n\n" + ex.Message,
+                    "Import failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return false;
             }
         }
