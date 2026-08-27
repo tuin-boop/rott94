@@ -6,6 +6,16 @@
 ## About
 This is a source port of Apogee's DOS FPS game [Rise of the Triad](http://en.wikipedia.org/wiki/Rise_of_the_Triad), originally released in 1994 (Shareware) and 1995 (Full version).
 
+## Campaign co-op prototype
+
+This fork adds experimental two-player campaign co-op to the Windows port,
+including shared campaign progression, co-op enemy targeting, player respawns,
+no friendly fire, a host Rally command, and synchronized level transitions.
+See [COOP_TESTING.md](COOP_TESTING.md) for the current setup instructions,
+controls, and known limitations.
+
+![Two-player ROTT94 campaign co-op](docs/images/rott94-coop.png)
+
 
 ## Installing
 1. Enable unknown sources (and optionally debug connections for ADB support)

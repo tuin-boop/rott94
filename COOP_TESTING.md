@@ -1,5 +1,7 @@
 # ROTT94 co-op prototype testing
 
+![Two-player ROTT94 campaign co-op](docs/images/rott94-coop.png)
+
 ## Two copies on one Windows PC
 
 Run this from PowerShell in the repository root:
