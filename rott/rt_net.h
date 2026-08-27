@@ -61,6 +61,12 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #define COM_EXIT    23
 #define COM_GAMEEND 24
 #define COM_DELTANULL 25
+#define COM_RALLY   26
+#define COM_COOPBOOST 27
+#define COM_NETESCAPE 28
+#define COM_COOPKILLALL 29
+#define COM_COOPRESTART 30
+#define COM_COOPPOWERUP 31
 
 #define CHECKSYNCTIME  (VBLCOUNTER<<2)
 
@@ -250,6 +256,37 @@ typedef struct {
 typedef struct {
   byte  type;
   int   time;
+} COM_RallyType;
+
+typedef struct {
+  byte  type;
+  int   time;
+} COM_CoopBoostType;
+
+typedef struct {
+  byte  type;
+  int   time;
+} COM_NetEscapeType;
+
+typedef struct {
+  byte  type;
+  int   time;
+} COM_CoopKillAllType;
+
+typedef struct {
+  byte  type;
+  int   time;
+} COM_CoopRestartType;
+
+typedef struct {
+  byte  type;
+  int   time;
+  byte  powerup;
+} COM_CoopPowerupType;
+
+typedef struct {
+  byte  type;
+  int   time;
 } COM_PauseType;
 
 typedef struct {
@@ -295,6 +332,12 @@ void AddTextMessage ( char * message, int length, int towho );
 void AddEndGameCommand ( void );
 void AddPauseStateCommand ( int type );
 void AddRespawnCommand ( void );
+void AddRallyCommand ( void );
+void AddCoopBoostCommand ( void );
+void AddNetEscapeCommand ( void );
+void AddCoopKillAllCommand ( void );
+void AddCoopRestartCommand ( void );
+void AddCoopPowerupCommand ( int powerup );
 void RecordDemoCmd (void);
 void ResetCurrentCommand ( void );
 void AddRemoteRidiculeCommand ( int player, int towho, int num );

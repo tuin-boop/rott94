@@ -177,6 +177,60 @@ basic_actor_sounds  BAS[NUMCLASSES+3] =
 extern bool dopefish;
 
 
+static objtype *SelectCoopPlayerTarget(objtype *hunter)
+{
+   objtype *best = PLAYER[0];
+   int bestdistance = 0x7fffffff;
+   int i;
+
+   if (!COOPMODE || (numplayers < 2))
+      return best;
+
+   for (i=0;i<numplayers;i++)
+      {
+      objtype *candidate = PLAYER[i];
+      int distance;
+
+      if (!candidate || (candidate->flags & FL_DYING) ||
+         (PLAYERSTATE[i].health <= 0))
+         continue;
+
+      distance = FindDistance(candidate->x-hunter->x,
+         candidate->y-hunter->y);
+      if (distance < bestdistance)
+         {
+         best = candidate;
+         bestdistance = distance;
+         }
+      }
+
+   return best;
+}
+
+
+static bool AnyLivingPlayerVisible(objtype *observer)
+{
+   int i;
+
+   if (!COOPMODE || (numplayers < 2))
+      return CheckLine(observer,PLAYER[0],SIGHT);
+
+   for (i=0;i<numplayers;i++)
+      {
+      objtype *candidate = PLAYER[i];
+
+      if (!candidate || (candidate->flags & FL_DYING) ||
+         (PLAYERSTATE[i].health <= 0))
+         continue;
+
+      if (CheckLine(observer,candidate,SIGHT))
+         return true;
+      }
+
+   return false;
+}
+
+
 bool Masterdisk;
 
 static objtype    *SNAKEHEAD,*SNAKEEND,*PARTICLE_GENERATOR,*EXPLOSIONS;
@@ -2351,8 +2405,8 @@ void SpawnFirebomb(objtype*ob,int damage,int which)
       low = 0;
       high = which-1;
 
-      if ((FindDistance((ob->x-player->x), (ob->y-player->y))<0x120000) &&
-          (player->z==nominalheight)
+      if ((FindDistance((ob->x-PLAYER[0]->x), (ob->y-PLAYER[0]->y))<0x120000) &&
+          (PLAYER[0]->z==nominalheight)
          )
          SHAKETICS = 35;
       }
@@ -2441,6 +2495,10 @@ void MissileHitActor(objtype *owner, objtype *missile, objtype *victim,
    {
    int tcl = victim->obclass;
    int ocl = missile->obclass;
+
+   if (COOPMODE && (tcl == playerobj) && M_ISACTOR(owner) &&
+      (owner->obclass == playerobj))
+      return;
 
    if (
          (victim->flags & FL_DYING) || // hey, they're dying already;
@@ -2826,8 +2884,11 @@ void MissileHit (objtype *ob,void *hitwhat)
       case netobj:
          ob->state=NULL;
          MISCVARS->NET_IN_FLIGHT = false;
-         if (tempactor == PLAYER[0])
+         if (tempactor && (tempactor->obclass == playerobj))
             {
+            playertype *pstate;
+
+            M_LINKSTATE(tempactor,pstate);
             if ((tempactor->flags & FL_GODMODE) ||
                 (tempactor->flags & FL_DOGMODE) ||
                 godmode
@@ -2836,12 +2897,12 @@ void MissileHit (objtype *ob,void *hitwhat)
             else
                {
                damage = (random >>4) + 5;
-               PLAYERSTATE[0].NETCAPTURED = -1;
-               PLAYERSTATE[0].weapondowntics = WEAPONS[PLAYERSTATE[0].weapon].screenheight/GMOVE;
-               NewState(PLAYER[0],&s_player);
-               PLAYERSTATE[0].attackframe = PLAYERSTATE[0].weaponframe = 0;
-               PLAYERSTATE[0].batblast = 0;
-               if (PLAYERSTATE[0].HASKNIFE == false)
+               pstate->NETCAPTURED = -1;
+               pstate->weapondowntics = WEAPONS[pstate->weapon].screenheight/GMOVE;
+               NewState(tempactor,&s_player);
+               pstate->attackframe = pstate->weaponframe = 0;
+               pstate->batblast = 0;
+               if ((tempactor == player) && (pstate->HASKNIFE == false))
                   AddMessage("Wiggle left and right to get out of net!",
                              MSG_GAME);
                }
@@ -3126,6 +3187,13 @@ void T_Explosion(objtype* ob)
    for(check = firstactive;check;check=check->nextactive)
       {
       if (check == ob)
+         continue;
+
+      /* Campaign co-op disables friendly splash damage as well as direct
+         projectile hits. */
+      if (COOPMODE && M_ISACTOR(owner) &&
+          (owner->obclass == playerobj) &&
+          (check->obclass == playerobj))
          continue;
 
 //	  if (check == owner)
@@ -3480,7 +3548,8 @@ void BeginEnemyFatality(objtype *ob,objtype *attacker)
    {
 
 
-   if ((attacker == player) && (ob->obclass < (NUMENEMIES + 2)))
+   if (M_ISACTOR(attacker) && (attacker->obclass == playerobj) &&
+      (ob->obclass < (NUMENEMIES + 2)))
       {
       GivePoints(starthitpoints[gamestate.difficulty][ob->obclass]*5);
       if (timelimitenabled)
@@ -4055,7 +4124,7 @@ void T_Particle(objtype*ob)
 #if (SHAREWARE==0)
     if ((ob->flags & FL_EYEBALL) && (dx < 0x20000) && (dy < 0x20000) &&
         (dz < 64) && (GameRandomNumber("eye chance",0) < 15) &&
-        (SCREENEYE == NULL) && (locplayerstate->weapon != wp_dog)
+        (SCREENEYE == NULL) && (PLAYERSTATE[0].weapon != wp_dog)
        )
 #else
     if ((ob->flags & FL_EYEBALL) && (dx < 0x20000) && (dy < 0x20000) &&
@@ -4564,7 +4633,7 @@ void T_PlayDead(objtype *ob)
       return;
       }
 
-   dangle = abs(player->angle - AngleBetween(player,ob));
+   dangle = abs(PLAYER[0]->angle - AngleBetween(PLAYER[0],ob));
    if (dangle > ANGLES/2)
       dangle = ANGLES - dangle;
 
@@ -4657,6 +4726,15 @@ void HeatSeek(objtype*ob)
 
 
  owner=(objtype *)ob->whatever;
+ tactor=(objtype *)ob->target;
+
+ /* A co-op ally is never a valid homing target.  Player projectiles already
+    pass through allies, so retaining one here would make a God Hand orb orbit
+    that player forever. */
+ if (COOPMODE && M_ISACTOR(owner) &&
+     (owner->obclass == playerobj) && M_ISACTOR(tactor) &&
+     (tactor->obclass == playerobj))
+    ob->target = NULL;
 
  if (ob->dirchoosetime)
     ob->dirchoosetime --;
@@ -4668,8 +4746,13 @@ void HeatSeek(objtype*ob)
 
          for (tactor=firstactive;tactor;tactor=tactor->nextactive)
             {
-            if (tactor == owner)
-               continue;
+             if (tactor == owner)
+                continue;
+
+             if (COOPMODE && M_ISACTOR(owner) &&
+                 (owner->obclass == playerobj) &&
+                 (tactor->obclass == playerobj))
+                continue;
 
             if (tactor->flags & FL_HEAD)
                continue;
@@ -5086,6 +5169,13 @@ actors:
          continue;
 
       tcl = temp->obclass;
+
+	  /* Player-fired projectiles pass through co-op partners. */
+	  if (COOPMODE && (tcl == playerobj) &&
+	     (ob->whatever != NULL) &&
+	     (((objtype *)ob->whatever)->which == ACTOR) &&
+	     (((objtype *)ob->whatever)->obclass == playerobj))
+		 continue;
 
 
       zdist = 32;
@@ -6385,6 +6475,11 @@ movement_status CheckOtherActors(objtype*ob,int tryx,int tryy,int tryz)
 
 
          tcl = listrover->obclass;
+
+		 /* Co-op players are non-blocking so campaign starts and narrow
+		    passages cannot trap the team. They remain shootable by enemies. */
+		 if (COOPMODE && (ocl == playerobj) && (tcl == playerobj))
+			continue;
 
          if ((tcl == b_darksnakeobj) && (listrover != SNAKEHEAD))
             continue;
@@ -8455,8 +8550,8 @@ void CheckRunover(objtype*ob)
  if (dz > 10)
 	return;
 
- locplayerstate->heightoffset = 18 + locplayerstate->playerheight;
- locplayerstate->oldheightoffset = locplayerstate->heightoffset;
+ PLAYERSTATE[0].heightoffset = 18 + PLAYERSTATE[0].playerheight;
+ PLAYERSTATE[0].oldheightoffset = PLAYERSTATE[0].heightoffset;
  PLAYER[0]->temp2 = RENORMALIZE;
  DamageThing(PLAYER[0],30);
  Collision(PLAYER[0],ob,0,0);
@@ -9746,7 +9841,7 @@ void T_SnakePath(objtype*ob)
 {objtype*temp,*follower;
 
  if (SNAKEEND && (SNAKELEVEL == 2))
-  {if (CheckLine(SNAKEEND,PLAYER[0],SIGHT))
+  {if (AnyLivingPlayerVisible(SNAKEEND))
 	 {if (ob->temp3 == -1)               //if snake can see player
 													 //and he's presently stopped, restart
 		{for(temp=ob;temp;temp=(objtype*)(temp->whatever))
@@ -9913,12 +10008,13 @@ void T_SnakeFinale(objtype*ob)
 void T_DarkSnakeChase(objtype*ob)
    {
    objtype* temp,*follower;
+   objtype* target = SelectCoopPlayerTarget(ob);
    int tdir,angle;
 
 
    if (!(ob->flags & FL_ATTACKMODE))
       {
-      if (!(CheckSight(ob,player) || Near(ob,player,4)))
+      if (!(CheckSight(ob,target) || Near(ob,target,4)))
          return;
       else
          {
@@ -9938,9 +10034,9 @@ void T_DarkSnakeChase(objtype*ob)
       return;
       }
 
-   angle = AngleBetween(ob,PLAYER[0]);
+   angle = AngleBetween(ob,target);
    tdir = angletodir[angle];
-   if (Near(ob,PLAYER[0],6) && (ob->dir == (unsigned)tdir) && (!(ob->state->condition & SF_DOWN)))
+   if (Near(ob,target,6) && (ob->dir == (unsigned)tdir) && (!(ob->state->condition & SF_DOWN)))
       {
       NewState(ob,&s_snakefire1);
       SD_PlaySoundRTP(SD_SNAKEREADYSND,ob->x,ob->y);
@@ -9961,10 +10057,10 @@ void T_DarkSnakeChase(objtype*ob)
          //spawn spit;
       }
 
-   if (CheckLine(ob,PLAYER[0],SIGHT))
+   if (CheckLine(ob,target,SIGHT))
       {
-      ob->targettilex = PLAYER[0]->x;
-      ob->targettiley = PLAYER[0]->y;
+      ob->targettilex = target->x;
+      ob->targettiley = target->y;
       }
 
    if (ob->dirchoosetime)
@@ -10021,13 +10117,14 @@ void T_DarkmonkReact(objtype*ob)
 
 void T_DarkmonkCharge(objtype*ob)
 {int dx,dy;
+ objtype *target = SelectCoopPlayerTarget(ob);
 
- dx = abs(PLAYER[0]->x - ob->x);
- dy = abs(PLAYER[0]->y - ob->y);
+ dx = abs(target->x - ob->x);
+ dy = abs(target->y - ob->y);
  if ((dx < 0xa000) && (dy < 0xa000))
-  {DamageThing(PLAYER[0],10);
-   Collision(PLAYER[0],ob,0,0);
-	M_CheckPlayerKilled(PLAYER[0]);
+  {DamageThing(target,10);
+   Collision(target,ob,0,0);
+	M_CheckPlayerKilled(target);
   }
 
  if (!ob->ticcount)
@@ -10037,7 +10134,7 @@ void T_DarkmonkCharge(objtype*ob)
   ob->dirchoosetime --;
 
  if (NOMOM || (!ob->dirchoosetime))
-	{ob->angle = AngleBetween(ob,PLAYER[0]);
+	{ob->angle = AngleBetween(ob,target);
 	 ob->dir = angletodir[ob->angle];
 	 ParseMomentum(ob,ob->angle);
 	 ob->dirchoosetime = 5;
@@ -10051,6 +10148,7 @@ void T_DarkmonkCharge(objtype*ob)
 
 void T_DarkmonkLandAndFire(objtype*ob)
 {
+  objtype *target = SelectCoopPlayerTarget(ob);
 
   if (ob->z < nominalheight)
 	  {MISCVARS->monkz += MZADJUST;
@@ -10058,11 +10156,11 @@ void T_DarkmonkLandAndFire(objtype*ob)
 		//ob->z++;
 		return;
 	  }
-  if (Near(ob,PLAYER[0],3))
+  if (Near(ob,target,3))
 	 {if (GameRandomNumber("darkmonkland",0)<128)
 		NewState(ob,&s_darkmonkbball1);
 	  else
-		{ob->angle = AngleBetween(ob,PLAYER[0]);
+		{ob->angle = AngleBetween(ob,target);
 		 ob->dir = angletodir[ob->angle];
 		 ob->speed <<= 1;       // goes twice as fast
 		 ZEROMOM;
@@ -11185,14 +11283,18 @@ void T_Chase (objtype *ob)
 	classtype ocl;
 	statetype *temp;
 	bool doorok;
+	objtype *target;
+	playertype *targetstate;
 
 	ocl = ob->obclass;
+	target = SelectCoopPlayerTarget(ob);
+	M_LINKSTATE(target,targetstate);
 
 
    if ((ocl == deathmonkobj) || (ocl == blitzguardobj))
-	 {dx = abs(PLAYER[0]->x - ob->x);
-	  dy = abs(ob->y - PLAYER[0]->y);
-	  dz = abs(ob->z - PLAYER[0]->z);
+	 {dx = abs(target->x - ob->x);
+	  dy = abs(ob->y - target->y);
+	  dz = abs(ob->z - target->z);
 
 	  if ((dx < TOUCHDIST) && (dy < TOUCHDIST) && (dz < (TOUCHDIST >> 10)))
        {
@@ -11205,8 +11307,8 @@ void T_Chase (objtype *ob)
            }
         else
 #endif
-          if ((!ob->temp3) && (PLAYERSTATE[0].missileweapon != -1) &&
-                 (PLAYERSTATE[0].missileweapon < wp_godhand))
+          if ((!ob->temp3) && (targetstate->missileweapon != -1) &&
+                 (targetstate->missileweapon < wp_godhand))
            {NewState(ob,&s_blitzsteal1);
             STOPACTOR(ob);
             return;
@@ -11219,17 +11321,17 @@ void T_Chase (objtype *ob)
 	//if (CheckLine(ob,PLAYER[0],DIRCHECK) && (ocl != roboguardobj))
 
 	if (!ob->ticcount)
-	 {if (CheckLine(ob,PLAYER[0],SIGHT))   // got a shot at player?
+	 {if (CheckLine(ob,target,SIGHT))   // got a shot at player?
 		 {if (ocl != roboguardobj)
-			 {ob->targettilex = PLAYER[0]->x;
-			  ob->targettiley = PLAYER[0]->y;
+			 {ob->targettilex = target->x;
+			  ob->targettiley = target->y;
 			 }
 		 }
 
-     if (CheckLine(ob,PLAYER[0],SHOOT) && (!(player->flags&FL_DYING)))   // got a shot at player?
+     if (CheckLine(ob,target,SHOOT) && (!(target->flags&FL_DYING)))   // got a shot at player?
 		 {
-		  dx = abs(ob->tilex - PLAYER[0]->tilex);
-		  dy = abs(ob->tiley - PLAYER[0]->tiley);
+		  dx = abs(ob->tilex - target->tilex);
+		  dy = abs(ob->tiley - target->tiley);
 		  dist = (dx>dy)?(dx):(dy);
 		  if ((!dist) || (dist==1))
 				chance = 300;
@@ -11239,20 +11341,20 @@ void T_Chase (objtype *ob)
 				chance = 300/dist;
 
 		  if (GameRandomNumber("T_Chase",ocl) <chance)
-			 {if ((ocl == b_heinrichobj) && (Near(ob,PLAYER[0],4)))
+			 {if ((ocl == b_heinrichobj) && (Near(ob,target,4)))
 				 goto cdoor;
 
-			  ob->dir = angletodir[AngleBetween(ob,PLAYER[0])];
+			  ob->dir = angletodir[AngleBetween(ob,target)];
 			  STOPACTOR(ob);
 #if (SHAREWARE == 0)
-			  if ((ocl == overpatrolobj) && (!Near(ob,PLAYER[0],3)) &&
-					(!PLAYERSTATE[0].NETCAPTURED) && (!MISCVARS->NET_IN_FLIGHT))
+			  if ((ocl == overpatrolobj) && (!Near(ob,target,3)) &&
+					(!targetstate->NETCAPTURED) && (!MISCVARS->NET_IN_FLIGHT))
 				  {NewState(ob,&s_opbolo1);
 					MISCVARS->NET_IN_FLIGHT = true;
 					return;
 				  }
 #endif
-			  if ((ocl == triadenforcerobj) && (!Near(ob,PLAYER[0],3)))
+			  if ((ocl == triadenforcerobj) && (!Near(ob,target,3)))
 				 {NewState(ob,&s_enforcerthrow1);
 				  return;
 				 }
@@ -11260,7 +11362,7 @@ void T_Chase (objtype *ob)
 			  if ((temp=M_S(AIM)) != NULL)
 				 {if ((ob->flags & FL_HASAUTO) && (!ob->temp3))
 					 ob->temp3 = (GameRandomNumber("T_Chase FL_HASAUTO",ocl) % 5) + 3;
-				  ob->target = PLAYER[0];
+				  ob->target = target;
 				  NewState(ob,temp);
 				  return;
 				 }
@@ -11610,8 +11712,8 @@ void T_AutoPath (objtype *ob)
 	  statetype *align,*wait;
 
 	  ocl = ob->obclass;
-	  dx = player->x - ob->x;
-	  dy = ob->y - player->y;
+	  dx = PLAYER[0]->x - ob->x;
+	  dy = ob->y - PLAYER[0]->y;
 	  destdir = (angletodir[atan2_appx(dx,dy)] << 1);
 	  ob->temp1 = destdir;
 	  ob->targettilex = ob->dir; //save old dir
@@ -11721,7 +11823,7 @@ void A_Shoot (objtype *ob)
       // ready to annihilate this poor bastard
 
       SpawnMissile(ob,newmissiledata->obclass,newmissiledata->speed,
-                   AngleBetween(ob,player), newmissiledata->state,
+                   AngleBetween(ob,target), newmissiledata->state,
                    newmissiledata->offset);
 
       if (newmissiledata->obclass == p_drunkmissileobj)
@@ -11729,7 +11831,7 @@ void A_Shoot (objtype *ob)
          for(i=0;i<4;i++)
             {
             SpawnMissile(ob,newmissiledata->obclass,newmissiledata->speed,
-                        AngleBetween(ob,player), newmissiledata->state,
+                        AngleBetween(ob,target), newmissiledata->state,
                         newmissiledata->offset);
             }
          }
@@ -11808,6 +11910,7 @@ void A_Repeat(objtype*ob)
 void  A_MissileWeapon(objtype *ob)
 {
  int    sound,nspeed = 0,noffset,zoffset;
+ objtype *target = SelectCoopPlayerTarget(ob);
 
 #if (SHAREWARE == 0)
  int oldyzangle;
@@ -11830,7 +11933,7 @@ void  A_MissileWeapon(objtype *ob)
       return;
       }
 #endif
-	if ((ob->obclass == b_darianobj) && (!CheckLine(ob,PLAYER[0],SHOOT)))
+	if ((ob->obclass == b_darianobj) && (!CheckLine(ob,target,SHOOT)))
 	 {NewState(ob,M_S(CHASE));
 	  return;
 	 }
@@ -11899,8 +12002,8 @@ void  A_MissileWeapon(objtype *ob)
 		  ob->temp3 --; // decrement random fire no.
 
 
-		  dx = PLAYER[0]->x-ob->x;
-		  dy = ob->y-PLAYER[0]->y;
+		  dx = target->x-ob->x;
+		  dy = ob->y-target->y;
 		  if (GameRandomNumber("bcraft shoot up/down",0) < 128)
 			 dz = 10;
 		  else
@@ -11923,7 +12026,7 @@ void  A_MissileWeapon(objtype *ob)
 	;
     }
 
-	SpawnMissile(ob,nobclass,nspeed,AngleBetween(ob,PLAYER[0]),nstate,noffset);
+	SpawnMissile(ob,nobclass,nspeed,AngleBetween(ob,target),nstate,noffset);
 	new->z += zoffset;
 	SD_PlaySoundRTP(sound,ob->x,ob->y);
 	MISCVARS->madenoise = true;
@@ -12184,14 +12287,14 @@ void SelectDodgeDir (objtype *ob)
 
 
 
-#define ChasePlayer(ob)                          \
+#define ChasePlayer(ob,target)                   \
    {                                             \
-   dx= player->x-ob->x;                          \
-   dy= ob->y-player->y;                          \
+   dx= target->x-ob->x;                          \
+   dy= ob->y-target->y;                          \
    if ((abs(dx) < 0xb000) && (abs(dy) < 0xb000)) \
       return;                                    \
-   dummy.x = player->x;                          \
-   dummy.y = player->y;                          \
+   dummy.x = target->x;                          \
+   dummy.y = target->y;                          \
    }
 
 
@@ -12202,9 +12305,10 @@ void SelectChaseDir (objtype *ob)
 	dirtype dtry1,dtry2,tdir,olddir,next,prev,start,straight;
 	tpoint dummy;
 	byte dirtried[9] = {0};
+	objtype *target = SelectCoopPlayerTarget(ob);
 
 	olddir=ob->dir;
-	visible = CheckLine(ob,PLAYER[0],SIGHT);
+	visible = CheckLine(ob,target,SIGHT);
 
 	/*
 	if (ob->flags & FL_FIRSTATTACK)
@@ -12230,10 +12334,10 @@ void SelectChaseDir (objtype *ob)
       dummy.x = tx;
       dummy.y = ty;
       if ((abs(dx) < 0x2000) && (abs(dy) < 0x2000))
-         ChasePlayer(ob);
+         ChasePlayer(ob,target);
 		}
 	else
-      ChasePlayer(ob);
+      ChasePlayer(ob,target);
 
 	//if ((abs(dx) < 0x10000) && (abs(dy) < 0x10000))
 	 //return;
@@ -12622,6 +12726,7 @@ void FirstSighting (objtype *ob)
 
 bool SightPlayer (objtype *ob)
    {
+	objtype *target = SelectCoopPlayerTarget(ob);
 	//if (ob->flags & FL_ATTACKMODE)
 	  //Error ("An instance of %s in ATTACKMODE called SightPlayer!",debugstr[ob->obclass]);
 
@@ -12630,7 +12735,7 @@ bool SightPlayer (objtype *ob)
 
    if (ob->obclass == b_robobossobj)
       {
-      if (!(CheckSight(ob,player) || Near(ob,player,6)))
+      if (!(CheckSight(ob,target) || Near(ob,target,6)))
          return false;
 
       }
@@ -12638,7 +12743,7 @@ bool SightPlayer (objtype *ob)
 
    else if (ob->flags & FL_AMBUSH)
       {
-      if (!CheckSight (ob,PLAYER[0]))
+      if (!CheckSight (ob,target))
          {
          //SoftError("\n failed from ambush in SightPlayer");
          return false;
@@ -12649,12 +12754,12 @@ bool SightPlayer (objtype *ob)
       {
       if (ob->temp3 == SNEAKY)
          {
-         if (!Near(ob,PLAYER[0],2))
+         if (!Near(ob,target,2))
             return false;
          }
       else if (!((MISCVARS->madenoise) ||
-                 (CheckSight (ob,player)) ||
-                 (Near(ob,player,4))
+                 (CheckSight (ob,target)) ||
+                 (Near(ob,target,4))
                 )
               )
          {
@@ -12933,6 +13038,11 @@ void ShootActor(objtype * shooter, objtype * target, int damage, int accuracy, i
 
 
 	if (target->flags & FL_DYING)
+	  return;
+
+	/* Campaign co-op has no friendly fire. */
+	if (COOPMODE && (shooter->obclass == playerobj) &&
+	   (target->obclass == playerobj))
 	  return;
 
 	dx = abs(shooter->x - target->x);

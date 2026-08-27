@@ -1317,7 +1317,15 @@ void  GivePoints (long points)
 
 void GiveKey (int key)
 {
-   locplayerstate->keys |= (1<<key);
+   int i;
+
+   if (COOPMODE)
+      {
+      for (i = 0; i < numplayers; i++)
+         PLAYERSTATE[i].keys |= (1<<key);
+      }
+   else
+      locplayerstate->keys |= (1<<key);
    DrawKeys (false);
 }
 

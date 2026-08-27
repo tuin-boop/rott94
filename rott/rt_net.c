@@ -78,6 +78,7 @@ bool    IsServer;
 bool    standalone;
 bool    restartgame=false;
 bool    respawnactive=false;
+bool    netescapeactive=false;
 bool    playerdead=false;
 bool    controlschanged=true;
 bool    battlegibs=false;
@@ -122,6 +123,33 @@ static int PlayerStatus[MAXPLAYERS];
 static int controldivisor=1;
 static int nextupdatetime;
 static bool UpdateServer=true;
+
+static bool NetTraceEnabled(void)
+{
+   static int enabled = -1;
+
+   if (enabled < 0)
+      enabled = CheckParm("netdebug") != 0;
+   return enabled != 0;
+}
+
+static void TraceNetworkCommand(const char *stage, int slot, void *packetptr)
+{
+   MoveType *packet = (MoveType *)packetptr;
+
+   if (!NetTraceEnabled() || ((packet->time % 35) != 0))
+      return;
+
+   if ((packet->type == COM_DELTA) ||
+      (packet->type == COM_SOUNDANDDELTA))
+      printf("NETTRACE %s local=%d slot=%d type=%d time=%d move=%d,%d angle=%u\n",
+         stage,consoleplayer,slot,packet->type,packet->time,
+         packet->momx,packet->momy,packet->dangle);
+   else
+      printf("NETTRACE %s local=%d slot=%d type=%d time=%d\n",
+         stage,consoleplayer,slot,packet->type,packet->time);
+   fflush(stdout);
+}
 
 void CheckForPacket ( void );
 void PrepareLocalPacket ( void );
@@ -458,7 +486,8 @@ void ShutdownClientControls ( void )
    controlupdatestarted=0;
    for (i=0;i<numplayers;i++)
        {
-       if (PlayerStatus[i] == player_leftgame)
+       if ((PlayerStatus[i] == player_leftgame) ||
+           (COOPMODE && (PlayerStatus[i] == player_quitgame)))
           PlayerStatus[i]=player_ingame;
        }
 }
@@ -936,6 +965,60 @@ void AddRespawnCommand ( void )
 
 //****************************************************************************
 //
+// AddRallyCommand()
+//
+//****************************************************************************
+void AddRallyCommand ( void )
+{
+   ((COM_RallyType *)NextLocalCommand())->type=COM_RALLY;
+   PrepareLocalPacket();
+}
+
+
+void AddCoopBoostCommand ( void )
+{
+   ((COM_CoopBoostType *)NextLocalCommand())->type=COM_COOPBOOST;
+   PrepareLocalPacket();
+}
+
+
+void AddNetEscapeCommand ( void )
+{
+   if (netescapeactive==true)
+      return;
+
+   netescapeactive=true;
+   ((COM_NetEscapeType *)NextLocalCommand())->type=COM_NETESCAPE;
+   PrepareLocalPacket();
+}
+
+
+void AddCoopKillAllCommand ( void )
+{
+   ((COM_CoopKillAllType *)NextLocalCommand())->type=COM_COOPKILLALL;
+   PrepareLocalPacket();
+}
+
+
+void AddCoopRestartCommand ( void )
+{
+   ((COM_CoopRestartType *)NextLocalCommand())->type=COM_COOPRESTART;
+   PrepareLocalPacket();
+}
+
+
+void AddCoopPowerupCommand ( int powerup )
+{
+   COM_CoopPowerupType *cmd=(COM_CoopPowerupType *)NextLocalCommand();
+
+   cmd->type=COM_COOPPOWERUP;
+   cmd->powerup=(byte)powerup;
+   PrepareLocalPacket();
+}
+
+
+//****************************************************************************
+//
 // AddTextMessage()
 //
 //****************************************************************************
@@ -1046,6 +1129,24 @@ int GetPacketSize (void * pkt)
          break;
       case COM_RESPAWN:
          size=sizeof(COM_RespawnType);
+         break;
+      case COM_RALLY:
+         size=sizeof(COM_RallyType);
+         break;
+      case COM_COOPBOOST:
+         size=sizeof(COM_CoopBoostType);
+         break;
+      case COM_NETESCAPE:
+         size=sizeof(COM_NetEscapeType);
+         break;
+      case COM_COOPKILLALL:
+         size=sizeof(COM_CoopKillAllType);
+         break;
+      case COM_COOPRESTART:
+         size=sizeof(COM_CoopRestartType);
+         break;
+      case COM_COOPPOWERUP:
+         size=sizeof(COM_CoopPowerupType);
          break;
       case COM_UNPAUSE:
          size=sizeof(COM_UnPauseType);
@@ -1730,6 +1831,12 @@ void ProcessPacket (void * pkt, int src)
       case COM_EXIT:
       case COM_REMRID:
       case COM_RESPAWN:
+      case COM_RALLY:
+      case COM_COOPBOOST:
+      case COM_NETESCAPE:
+      case COM_COOPKILLALL:
+      case COM_COOPRESTART:
+      case COM_COOPPOWERUP:
       case COM_UNPAUSE:
       case COM_ENDGAME:
 #if (SYNCCHECK == 1)
@@ -1770,6 +1877,14 @@ void ProcessPacket (void * pkt, int src)
          break;
 
       case COM_START:
+      case COM_SYNC:
+         /*
+          * A peer can reach ComSetTime a few tics before this machine when a
+          * network level ends (notably after a co-op death).  Sync packets are
+          * retried by the handshake, so an early one received while the old
+          * play loop is still draining must not be treated as a bad gameplay
+          * command.
+          */
          break;
 
       default:
@@ -1794,6 +1909,7 @@ void AddServerSubPacket(COM_ServerHeaderType * serverpkt)
    pkt=&serverpkt->data;
    for (i=0;i<serverpkt->numpackets;i++)
       {
+      TraceNetworkCommand("client-unpack",i,pkt);
       AddClientPacket(pkt,i);
       pkt+=GetPacketSize(pkt);
       }
@@ -1889,6 +2005,12 @@ void AddClientPacket (void * pkt, int src)
       case COM_QUIT:
       case COM_EXIT:
       case COM_RESPAWN:
+      case COM_RALLY:
+      case COM_COOPBOOST:
+      case COM_NETESCAPE:
+      case COM_COOPKILLALL:
+      case COM_COOPRESTART:
+      case COM_COOPPOWERUP:
       case COM_UNPAUSE:
 #if (SYNCCHECK == 1)
       case COM_SYNCCHECK:
@@ -1919,6 +2041,8 @@ void AddSubPacket (void * pkt, int src)
       Error("Modem game should not be here in AddSubPacket\n");
 
    packet = (MoveType *) pkt;
+
+   TraceNetworkCommand("server-input",src,packet);
 
    ClientCommandStatus(src, packet->time)=cs_ready;
 
@@ -2154,6 +2278,7 @@ void SendFullServerPacket ( void )
    memset(playerstatus,-1,sizeof(playerstatus));
 	for (i=0;i<numplayers;i++)
       {
+      TraceNetworkCommand("server-broadcast",i,ClientCommand(i,timeindex));
       size=GetPacketSize(ClientCommand(i,timeindex));
       if (((MoveType *)ClientCommand(i,timeindex))->type == COM_QUIT)
          {
@@ -2184,7 +2309,13 @@ void SendFullServerPacket ( void )
          else
             {
             ResetClientCommands(i);
-            PlayerStatus[i]=playerstatus[i];
+
+            /* In co-op, the simulation command is responsible for ending the
+               session on every peer.  Marking a remote quitter as gone here
+               makes ControlPlayerObj skip ProcessPlayerCommand, so the host
+               never consumes COM_QUIT and remains stranded in the level. */
+            if (!(COOPMODE && (playerstatus[i] == player_quitgame)))
+               PlayerStatus[i]=playerstatus[i];
             }
          }
       }
@@ -2256,10 +2387,28 @@ void ProcessServer ( void )
                }
             savetime=GetTicCount()+NETWORKTIMEOUT;
             }
-//         if (GetTicCount()>quittime)
-//            {
-//            Error("Server aborting after %ld seconds\n",SERVERTIMEOUT/VBLCOUNTER);
-//            }
+         if (COOPMODE && (GetTicCount()>quittime))
+            {
+            bool lostplayer = false;
+
+            for (i=0;i<numplayers;i++)
+               {
+               if ((PlayerStatus[i] == player_ingame) &&
+                  (ClientCommandStatus(i,serverupdatetime) != cs_ready))
+                  {
+                  PlayerStatus[i] = player_quitgame;
+                  lostplayer = true;
+                  }
+               }
+
+            if (lostplayer)
+               {
+               AddMessage("Co-op peer disconnected. Ending session.",MSG_SYSTEM);
+               playstate = ex_battledone;
+               exit = true;
+               done = true;
+               }
+            }
          if ((standalone==false) && (done==false))
             {
             exit=true;
@@ -2416,6 +2565,40 @@ void ProcessPlayerCommand( int player )
          respawnactive=false;
       RespawnPlayerobj(PLAYER[player]);
       }
+	else if (cmd->type==COM_RALLY)
+      {
+      if (COOPMODE && (player == 0))
+         RallyCoopPlayers(player);
+      }
+	else if (cmd->type==COM_COOPBOOST)
+      {
+      if (COOPMODE && (player == 0))
+         ApplyCoopTestBoost();
+      }
+	else if (cmd->type==COM_NETESCAPE)
+      {
+      if (player==consoleplayer)
+         netescapeactive=false;
+      if (COOPMODE)
+         ReleasePlayerFromNet(player);
+      }
+	else if (cmd->type==COM_COOPKILLALL)
+      {
+      if (COOPMODE && (player == 0))
+         ApplyCoopKillAll();
+      }
+	else if (cmd->type==COM_COOPRESTART)
+      {
+      if (COOPMODE && (player == 0))
+         playstate=ex_warped;
+      }
+	else if (cmd->type==COM_COOPPOWERUP)
+      {
+      COM_CoopPowerupType *powerupcmd=(COM_CoopPowerupType *)cmd;
+
+      if (COOPMODE)
+         ApplyCoopPowerup(player,powerupcmd->powerup);
+      }
 	else if (cmd->type==COM_ENDGAME)
       {
       playstate = ex_battledone;
@@ -2423,7 +2606,19 @@ void ProcessPlayerCommand( int player )
    else if (cmd->type==COM_QUIT)
       {
       if (player==consoleplayer)
-         QuitGame();
+         {
+         if (COOPMODE)
+            {
+            /* Leaving a co-op session should not terminate the executable.
+               The current two-player lockstep transport cannot continue after
+               either peer departs, so both peers return cleanly to the title
+               menu.  Join-in-progress will later replace this session-wide
+               teardown with a removable/reconnectable player slot. */
+            playstate=ex_battledone;
+            }
+         else
+            QuitGame();
+         }
       else
          {
          char str[50]="Player #";
@@ -2435,6 +2630,11 @@ void ProcessPlayerCommand( int player )
          strcat(str," has left the game.");
          AddMessage(str,MSG_REMOTE);
          PlayerStatus[player]=player_quitgame;
+         if (COOPMODE)
+            {
+            AddMessage("Co-op peer left. Ending session.",MSG_SYSTEM);
+            playstate=ex_battledone;
+            }
          }
       }
    else if (cmd->type==COM_EXIT)
@@ -2716,16 +2916,13 @@ void UpdatePlayerObj ( int player )
 
 void SendPlayerDescription( void )
 {
-   byte * temp;
-   COM_GamePlayerType * desc;
+   COM_GamePlayerType packet;
+   COM_GamePlayerType * desc = &packet;
    int length;
 
    length=sizeof(COM_GamePlayerType);
-   temp=SafeMalloc(length);
+   memset(&packet,0,length);
 
-   memset(temp,0,length);
-
-   desc=(COM_GamePlayerType *)temp;
    desc->type=(byte)COM_GAMEDESC;
 	desc->player=consoleplayer;
    desc->violence=gamestate.violence;
@@ -2736,9 +2933,7 @@ void SendPlayerDescription( void )
    strcpy(&(desc->playerdescription.codename[0]),
       &locplayerstate->codename[0]);
 
-   WritePacket(temp,length,server);
-
-   SafeFree(temp);
+   WritePacket(&packet,length,server);
 }
 
 //****************************************************************************
@@ -2749,17 +2944,14 @@ void SendPlayerDescription( void )
 
 void SendGameDescription( void )
 {
-   byte * temp;
-   COM_GameMasterType * desc;
+   COM_GameMasterType packet;
+   COM_GameMasterType * desc = &packet;
    int length;
    int i;
 
    length=sizeof(COM_GameMasterType);
-   temp=SafeMalloc(length);
+   memset(&packet,0,length);
 
-   memset(temp,0,length);
-
-   desc=(COM_GameMasterType *)temp;
    desc->type=(byte)COM_GAMEMASTER;
    desc->level=gamestate.mapon;
    desc->mapcrc=GetMapCRC (gamestate.mapon);
@@ -2790,14 +2982,12 @@ void SendGameDescription( void )
 
    if (IsServer==false)
       {
-      WritePacket(temp,length,server);
+      WritePacket(&packet,length,server);
       }
    else
       {
-      BroadcastServerPacket(temp,length); // Send to all
+      BroadcastServerPacket(&packet,length); // Send to all
       }
-
-   SafeFree(temp);
 }
 
 //****************************************************************************
@@ -2880,19 +3070,16 @@ void SetPlayerDescription( void * pkt )
 
 void SendGameAck( void )
 {
-   byte * temp;
+   COM_GameAckType packet;
    int length;
-   COM_GameAckType * desc;
+   COM_GameAckType * desc = &packet;
 
    length=sizeof(COM_GameAckType);
-   temp=SafeMalloc(length);
-   desc=(COM_GameAckType *)temp;
+   memset(&packet,0,length);
    desc->type=COM_GAMEACK;
 	desc->player=consoleplayer;
 
-   WritePacket(temp,length,server);
-
-   SafeFree(temp);
+   WritePacket(&packet,length,server);
 }
 
 //****************************************************************************
@@ -2903,23 +3090,21 @@ void SendGameAck( void )
 
 void SendGameStart( void )
 {
-   byte * temp;
+   byte packet[DUMMYPACKETSIZE];
    int length;
 
    length=DUMMYPACKETSIZE;
-   temp=SafeMalloc(length);
-   *(temp)=(byte)COM_GAMEPLAY;
+   memset(packet,0,length);
+   packet[0]=(byte)COM_GAMEPLAY;
 
    if (IsServer==false)
       {
-      WritePacket(temp,length,server);
+      WritePacket(packet,length,server);
       }
    else
       {
-      BroadcastServerPacket(temp,length); // Send to all
+      BroadcastServerPacket(packet,length); // Send to all
       }
-
-   SafeFree(temp);
 }
 
 //****************************************************************************

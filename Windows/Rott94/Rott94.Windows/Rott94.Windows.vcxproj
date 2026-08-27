@@ -257,7 +257,7 @@
       <WarningLevel>Level3</WarningLevel>
       <Optimization>Disabled</Optimization>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>SHAREWARE=0;SUPERROTT=0;SITELICENSE=1;PLATFORM_WIN32;_SCL_SECURE_NO_WARNINGS;_CRT_SECURE_NO_WARNINGS;_CRT_NONSTDC_NO_DEPRECATE;USE_SDL=1;__WIN32__</PreprocessorDefinitions>
+      <PreprocessorDefinitions>SHAREWARE=0;SUPERROTT=0;SITELICENSE=0;PLATFORM_WIN32;_SCL_SECURE_NO_WARNINGS;_CRT_SECURE_NO_WARNINGS;_CRT_NONSTDC_NO_DEPRECATE;USE_SDL=1;__WIN32__</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <AdditionalIncludeDirectories>$(IntermediateOutputPath)\SDL2_mixer-2.6.3\include;$(IntermediateOutputPath)\SDL2-2.26.5\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <DisableSpecificWarnings>
@@ -314,7 +314,7 @@
       <WarningLevel>Level3</WarningLevel>
       <Optimization>Disabled</Optimization>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>SHAREWARE=0;SUPERROTT=0;SITELICENSE=1;PLATFORM_WIN32;_SCL_SECURE_NO_WARNINGS;_CRT_SECURE_NO_WARNINGS;_CRT_NONSTDC_NO_DEPRECATE;USE_SDL=1;__WIN32__</PreprocessorDefinitions>
+      <PreprocessorDefinitions>SHAREWARE=0;SUPERROTT=0;SITELICENSE=0;PLATFORM_WIN32;_SCL_SECURE_NO_WARNINGS;_CRT_SECURE_NO_WARNINGS;_CRT_NONSTDC_NO_DEPRECATE;USE_SDL=1;__WIN32__</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <AdditionalIncludeDirectories>$(IntermediateOutputPath)\SDL2_mixer-2.6.3\include;$(IntermediateOutputPath)\SDL2-2.26.5\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
@@ -367,7 +367,7 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>SHAREWARE=0;SUPERROTT=0;SITELICENSE=1;PLATFORM_WIN32;_SCL_SECURE_NO_WARNINGS;_CRT_SECURE_NO_WARNINGS;_CRT_NONSTDC_NO_DEPRECATE;USE_SDL=1;__WIN32__</PreprocessorDefinitions>
+      <PreprocessorDefinitions>SHAREWARE=0;SUPERROTT=0;SITELICENSE=0;PLATFORM_WIN32;_SCL_SECURE_NO_WARNINGS;_CRT_SECURE_NO_WARNINGS;_CRT_NONSTDC_NO_DEPRECATE;USE_SDL=1;__WIN32__</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <AdditionalIncludeDirectories>$(IntermediateOutputPath)\SDL2_mixer-2.6.3\include;$(IntermediateOutputPath)\SDL2-2.26.5\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
@@ -430,7 +430,7 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>SHAREWARE=0;SUPERROTT=0;SITELICENSE=1;PLATFORM_WIN32;_SCL_SECURE_NO_WARNINGS;_CRT_SECURE_NO_WARNINGS;_CRT_NONSTDC_NO_DEPRECATE;USE_SDL=1;__WIN32__</PreprocessorDefinitions>
+      <PreprocessorDefinitions>SHAREWARE=0;SUPERROTT=0;SITELICENSE=0;PLATFORM_WIN32;_SCL_SECURE_NO_WARNINGS;_CRT_SECURE_NO_WARNINGS;_CRT_NONSTDC_NO_DEPRECATE;USE_SDL=1;__WIN32__</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <AdditionalIncludeDirectories>$(IntermediateOutputPath)\SDL2_mixer-2.6.3\include;$(IntermediateOutputPath)\SDL2-2.26.5\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>

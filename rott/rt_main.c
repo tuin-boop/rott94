@@ -211,7 +211,8 @@ int main (int argc, char *argv[])
 
 #ifndef DOS
 #	ifndef __ANDROID__
-   signal (11, crash_print);
+   if (CheckParm("nocatch") == 0)
+      signal (11, crash_print);
 #	endif
 
    if (setup_homedir() == -1) return 1;
@@ -859,9 +860,7 @@ void DataPath(char * path, char * filename)
 #else
 	const char * baseDir = "assets";
 #endif
-	strncpy(path, baseDir, MAX_PATH);
-	strncat(path, PATH_SEP_STR, MAX_PATH);
-	strncat(path, filename, MAX_PATH);
+	snprintf(path, MAX_PATH, "%s%s%s", baseDir, PATH_SEP_STR, filename);
 }
 
 void SetupWads( void )
@@ -1492,8 +1491,17 @@ void GameLoop (void)
 
             Z_FreeTags (PU_LEVELSTRUCT, PU_LEVELEND);       // Free current level
 
+            if (COOPMODE)
+               ShutdownClientControls();
+
             fizzlein = true;
             SetupGameLevel ();
+
+            if (COOPMODE)
+               {
+               SetupScreen (true);
+               DisableScreenStretch();
+               }
 
             playstate = ex_stillplaying;
          break;
@@ -1579,7 +1587,13 @@ void GameLoop (void)
 #endif
             LevelCompleted ( playstate );
 
-            NextLevel = GetNextMap(player->tilex,player->tiley);
+            if (COOPMODE && COOP_ExitPlayer)
+               NextLevel = GetNextMap(COOP_ExitPlayer->tilex,
+                                      COOP_ExitPlayer->tiley);
+            else
+               NextLevel = GetNextMap(player->tilex,player->tiley);
+
+            COOP_ExitPlayer = NULL;
 
             demoplayback = false;
 
@@ -1590,6 +1604,18 @@ void GameLoop (void)
                PlayCinematic();
                fizzlein = true;
                SetupGameLevel ();
+
+               /* The normal new-game path rebuilds the high-resolution view
+                  tables after SetupGameLevel and then leaves cinematic stretch
+                  mode.  Level-to-level transitions historically skipped both,
+                  which leaves the co-op view sheared and the weapon layer off
+                  screen after an episode cinematic. */
+               if (COOPMODE)
+                  {
+                  SetupScreen (true);
+                  DisableScreenStretch();
+                  }
+
                playstate = ex_stillplaying;
                }
             else
@@ -1864,6 +1890,11 @@ void InitCharacter
       gamestate.mapon = startlevel;
       gamestate.difficulty = DefaultDifficulty;
       }
+   else if ( gamestate.battlemode == battle_Coop )
+      {
+      /* Preserve the level selected by the host and shared in GAMEMASTER. */
+      gamestate.difficulty = DefaultDifficulty;
+      }
    else
       {
       gamestate.difficulty = gd_hard;
@@ -2084,9 +2115,23 @@ fromloadedgame:
 	tics      = 0;
 	SetFastTics(0);
 
+   /* Network rendering never performs the single-player fizzle (see
+      ThreeDRefresh), so leaving this set after a level transition would keep
+      client controls shut down forever. */
+   if (modemgame && fizzlein)
+      fizzlein = false;
+
    if ( fizzlein == false )
       {
       StartupClientControls();
+
+      /* StartupClientControls performs an initial input poll.  Mouse motion
+         accumulated while the boss/cinematic screens owned input can update
+         the local player's horizon during that poll, after the level setup
+         reset has already run.  Settle every co-op view once more here so a
+         level transition cannot begin at the vertical-look limit. */
+      if (COOPMODE)
+         ResetCoopPlayerPresentation();
       }
    else
       {
@@ -2172,7 +2217,8 @@ fromloadedgame:
 
       UpdateClientControls();
 
-      if ( ( !BATTLEMODE ) && ( CP_CheckQuick( LastScan ) ) )
+      if ( ( !BATTLEMODE ) && ( !COOPMODE ) &&
+         ( CP_CheckQuick( LastScan ) ) )
 			{
          bool escaped=false;
 
@@ -2240,7 +2286,7 @@ fromloadedgame:
             }
          }
 
-      if ( BATTLEMODE )
+      if ( BATTLEMODE || COOPMODE )
          {
          if ( MSG.messageon == false )
             {
@@ -2253,7 +2299,17 @@ fromloadedgame:
                quitactive = true;
                quittime   = GetTicCount() + QUITTIMEINTERVAL;
 
-               if ( (consoleplayer == 0) || (networkgame == false) )
+               if (COOPMODE && (consoleplayer == 0))
+                  {
+                  AddMessage( "End the co-op session for everyone? "
+                     "(\\FY\\O/\\FN\\O)", MSG_QUIT );
+                  }
+               else if (COOPMODE)
+                  {
+                  AddMessage( "Leave the co-op session? "
+                     "(\\FY\\O/\\FN\\O)", MSG_QUIT );
+                  }
+               else if ( (consoleplayer == 0) || (networkgame == false) )
                   {
                   AddMessage( "Do you want to end this game? "
                      "(\\FY\\O/\\FN\\O)", MSG_QUIT );
@@ -2404,6 +2460,7 @@ void PollKeyboard
 
    {
    static char autopressed = false;
+   static bool coopmappressed = false;
 
    wami(5);
 
@@ -2480,7 +2537,13 @@ void PollKeyboard
          }
       if ( buttonpoll[ bt_map ] )
          {
-         if ( !BATTLEMODE )
+         if (COOPMODE)
+            {
+            if (!coopmappressed)
+               AddMessage("Automap is temporarily disabled in co-op.",MSG_SYSTEM);
+            coopmappressed = true;
+            }
+         else if ( !BATTLEMODE )
             {
             // Automap
             StopWind();
@@ -2503,6 +2566,8 @@ void PollKeyboard
             SetupScreen( true );
             }
          }
+      else
+         coopmappressed = false;
 
       // Shrink screen
       if ( Keyboard[ sc_Minus ] )
@@ -2601,7 +2666,7 @@ void PollKeyboard
          }
 
 //#if 0
-      if ( ( Keyboard[ sc_F12 ] ) && ( !BATTLEMODE ) )
+      if ( ( Keyboard[ sc_F12 ] ) && ( !BATTLEMODE ) && ( !COOPMODE ) )
          {
          Keyboard[ sc_F12 ] = false;
          LastScan = 0;

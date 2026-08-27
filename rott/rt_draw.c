@@ -5530,6 +5530,13 @@ void DIPCredits ( void )
 
 void DoEndCinematic ( void )
 {
+	bool wasinmenu = inmenu;
+
+	/* The ending replaces the play view and HUD with its own full-screen
+	   artwork.  Keep FlipPage from running gameplay-only screen shake here:
+	   ScreenShake redraws the HUD, whose cached pictures may already have
+	   been released while leaving a co-op level. */
+	inmenu = true;
 	EnableScreenStretch();
 
    viewwidth = 320;//MAXSCREENWIDTH;
@@ -5552,6 +5559,7 @@ void DoEndCinematic ( void )
       if (LastScan !=0)
          {
          IN_UpdateKeyboard();
+         inmenu = wasinmenu;
          return;
          }
       DoFinalEnd();
@@ -5566,6 +5574,7 @@ void DoEndCinematic ( void )
       gamestate.mapon=33;
       }
    IN_UpdateKeyboard();
+   inmenu = wasinmenu;
 }
 
 void DoInBetweenCinematic (int yoffset, int lump, int delay, char * string )

@@ -138,6 +138,7 @@ statobj_t      *BulletHoles[MAXBULLETS];
 int            BulletHoleNum;
 
 objtype        *PLAYER[MAXPLAYERS],*player;
+objtype        *COOP_ExitPlayer = NULL;
 playertype     PLAYERSTATE[MAXPLAYERS],*locplayerstate;
 
 gametype       gamestate;
@@ -891,6 +892,8 @@ void MissileAutoTarget(objtype *ob,missile_stats *mdata)
       {
       if (temp == ob)
          continue;
+      if (COOPMODE && (temp->obclass == playerobj))
+         continue;
       if ((!(temp->flags & FL_SHOOTABLE)) || (temp->flags & FL_DYING))
          continue;
       if (!CheckLine(ob,temp,SHOOT))
@@ -1060,7 +1063,8 @@ void DogAttack(objtype*ob)
          continue;
 
 
-      if ((temp == ob) || (temp->obclass == roboguardobj))
+      if ((temp == ob) || (temp->obclass == roboguardobj) ||
+          (COOPMODE && (temp->obclass == playerobj)))
          continue;
 
       if ((!(temp->flags & FL_SHOOTABLE)) || (temp->flags & FL_DYING))
@@ -1120,10 +1124,13 @@ void DogBlast(objtype*ob)
          temp = (objtype*)actorat[x][y];
 
          if (temp && (temp->which == ACTOR) && (temp->flags & FL_SHOOTABLE) &&
-             (temp != ob) && (temp->obclass < roboguardobj) &&
-             (temp->flags & FL_ABP)
-            )
+              (temp != ob) && (temp->obclass < roboguardobj) &&
+              (temp->flags & FL_ABP)
+             )
             {
+            if (COOPMODE && (temp->obclass == playerobj))
+               continue;
+
             DamageThing(temp,100);
             if ((temp->hitpoints<=0) && (temp->obclass < roboguardobj))
                {
@@ -1525,7 +1532,7 @@ void Cmd_Fire (objtype*ob)
 
    else if (pstate->NETCAPTURED == 1)
       {
-      NewState(player,&s_free);
+      NewState(ob,&s_free);
       pstate->attackcount = FREE.attackinfo[0].mtics;
       pstate->weaponframe = FREE.attackinfo[0].frame;
       }
@@ -2537,11 +2544,16 @@ void PollMove (void)
          leftmom  = 0;
          first    = 1;
          lastmom^=1;
-			locplayerstate->NETCAPTURED = 0;
+         if (COOPMODE)
+            AddNetEscapeCommand();
+         else
+            {
+            locplayerstate->NETCAPTURED = 0;
 			MISCVARS->NET_IN_FLIGHT = false;
-         NewState(player, &s_player);
+            NewState(player, &s_player);
 			locplayerstate->weaponuptics = WEAPONS[locplayerstate->weapon].screenheight/GMOVE;
 			locplayerstate->weaponheight = locplayerstate->weaponuptics*GMOVE ;
+            }
       }
    }
    else if ((buttonpoll[bt_strafe]) && (turnaround==0))
@@ -2938,7 +2950,8 @@ void PollControls (void)
 	if (player->flags & FL_DYING) // Player has died
       {
       if ((playerdead==true) &&
-          ( buttonpoll[ bt_strafe ] ||
+          ( (COOPMODE && (CheckParm("cooprestart") == 0)) ||
+            buttonpoll[ bt_strafe ] ||
             buttonpoll[ bt_attack ] ||
             buttonpoll[ bt_use ] ||
             ((gamestate.battlemode == battle_Hunter) &&
@@ -2963,6 +2976,55 @@ void PollControls (void)
          AddPauseStateCommand(COM_PAUSE);
          }
       }
+
+   if (COOPMODE && Keyboard[sc_F12])
+      {
+      Keyboard[sc_F12]=false;
+      LastScan=0;
+      if (consoleplayer == 0)
+         AddRallyCommand();
+      else
+         AddMessage("Only the co-op host can Rally players.",MSG_SYSTEM);
+      }
+
+   if (COOPMODE && Keyboard[sc_F10])
+      {
+      bool shifted=Keyboard[sc_LShift] || Keyboard[sc_RShift];
+
+      Keyboard[sc_F10]=false;
+      LastScan=0;
+      if (shifted)
+         AddCoopPowerupCommand(stat_godmode);
+      else if (consoleplayer == 0)
+         AddCoopBoostCommand();
+      else
+         AddMessage("Only the co-op host can apply the test boost.",MSG_SYSTEM);
+      }
+
+   if (COOPMODE && Keyboard[sc_F9])
+      {
+      bool shifted=Keyboard[sc_LShift] || Keyboard[sc_RShift];
+
+      Keyboard[sc_F9]=false;
+      LastScan=0;
+      if (shifted)
+         AddCoopPowerupCommand(stat_dogmode);
+      else if (consoleplayer == 0)
+         AddCoopKillAllCommand();
+      else
+         AddMessage("Only the co-op host can kill all enemies.",MSG_SYSTEM);
+      }
+
+   if (COOPMODE && Keyboard[sc_F8])
+      {
+      Keyboard[sc_F8]=false;
+      LastScan=0;
+      if (consoleplayer == 0)
+         AddCoopRestartCommand();
+      else
+         AddMessage("Only the co-op host can restart the level.",MSG_SYSTEM);
+      }
+
    if (Keyboard[sc_Insert] && Keyboard[sc_X]){
 	      AddExitCommand();
    }
@@ -3628,7 +3690,7 @@ keys:
       new->z = ob->z;
 
 
-      SetPlayerHorizon(pstate,GODYZANGLE);
+      SetPlayerHorizon(pstate,COOPMODE ? NORMALYZANGLE : GODYZANGLE);
 
       ob->flags &= ~(FL_GODMODE|FL_SHROOMS|FL_ELASTO|FL_FLEET|FL_DOGMODE);
       ob->flags |= FL_GODMODE;
@@ -4015,14 +4077,23 @@ void Thrust ( objtype * ob )
       return;
       }
 
-   if (ob==player)
+	if ( ( ob == player ) || COOPMODE )
 		{
       if (MAPSPOT(ob->tilex,ob->tiley,1) == EXITTILE)
+         {
+         COOP_ExitPlayer = ob;
          playstate=ex_completed;
+         }
       else if ( ( MAPSPOT( ob->tilex, ob->tiley, 2 ) & 0xff00 ) == 0xe400 )
+			{
+         COOP_ExitPlayer = ob;
          playstate = ex_secretdone;
+			}
 		else if (MAPSPOT(ob->tilex,ob->tiley,1) == SECRETEXITTILE)
+			{
+         COOP_ExitPlayer = ob;
 			playstate=ex_secretlevel;
+			}
 		}
 }
 
@@ -4093,6 +4164,209 @@ void Move_Player_From_Exit_To_Start(objtype *ob)
    }
 
 
+void ReleasePlayerFromNet(int playernum)
+   {
+   playertype *pstate;
+   objtype *ob;
+
+   if ((playernum < 0) || (playernum >= numplayers))
+      return;
+
+   pstate = &PLAYERSTATE[playernum];
+   ob = PLAYER[playernum];
+   if (!ob || !pstate->NETCAPTURED)
+      return;
+
+   pstate->NETCAPTURED = 0;
+   MISCVARS->NET_IN_FLIGHT = false;
+   NewState(ob,&s_player);
+   pstate->attackframe = 0;
+   pstate->weaponframe = 0;
+   pstate->attackcount = 0;
+   pstate->weapondowntics = 0;
+   pstate->weaponuptics = WEAPONS[pstate->weapon].screenheight/GMOVE;
+   pstate->weaponheight = pstate->weaponuptics*GMOVE;
+
+   if (ob == player)
+      AddMessage("You broke free of the net.",MSG_GAME);
+   }
+
+
+void ResetCoopPlayerPresentation(void)
+   {
+   int i;
+
+   if (!COOPMODE)
+      return;
+
+   for (i=0;i<numplayers;i++)
+      {
+      playertype *pstate = &PLAYERSTATE[i];
+      objtype *ob = PLAYER[i];
+
+      if (!ob)
+         continue;
+
+      ob->yzangle = 0;
+      SetPlayerHorizon(pstate,NORMALYZANGLE);
+      pstate->guntarget = NULL;
+      pstate->targettime = 0;
+
+      if (pstate->weapon < 0)
+         {
+         pstate->weapon = (pstate->bulletweapon >= 0) ?
+            pstate->bulletweapon : wp_pistol;
+         pstate->HASBULLETWEAPON[wp_pistol] = 1;
+         if (pstate->bulletweapon < 0)
+            pstate->bulletweapon = wp_pistol;
+         }
+
+      pstate->new_weapon = pstate->weapon;
+      pstate->attackframe = 0;
+      pstate->attackcount = 0;
+      pstate->weaponframe = 0;
+      pstate->weapondowntics = 0;
+      pstate->weaponuptics = 0;
+      pstate->weaponheight = 0;
+      }
+   }
+
+
+void RallyCoopPlayers(int rallyplayer)
+   {
+   int i;
+   objtype *leader;
+
+   if (!COOPMODE || (rallyplayer < 0) || (rallyplayer >= numplayers))
+      return;
+
+   leader = PLAYER[rallyplayer];
+   if (!leader || (leader->flags & FL_DYING))
+      return;
+
+   for (i=0;i<numplayers;i++)
+      {
+      int nx,ny,newarea;
+      objtype *follower = PLAYER[i];
+
+      if ((i == rallyplayer) || !follower ||
+         (follower->flags & FL_DYING))
+         continue;
+
+      nx = leader->tilex;
+      ny = leader->tiley;
+      FindEmptyTile(&nx,&ny);
+
+      if (actorat[follower->tilex][follower->tiley] == (void *)follower)
+         actorat[follower->tilex][follower->tiley] = NULL;
+
+      newarea = AREANUMBER(nx,ny);
+      if (follower->areanumber != newarea)
+         {
+         RemoveFromArea(follower);
+         follower->areanumber = newarea;
+         MakeLastInArea(follower);
+         }
+
+      SetTilePosition(follower,nx,ny);
+      actorat[nx][ny] = follower;
+      follower->drawx = follower->x;
+      follower->drawy = follower->y;
+      follower->z = PlatformHeight(nx,ny);
+      if ((follower->z == -10) || DiskAt(nx,ny))
+         follower->z = 0;
+      follower->momentumx = 0;
+      follower->momentumy = 0;
+      follower->momentumz = 0;
+      }
+
+   ConnectAreas();
+   if (player)
+      UpdateLightLevel(player->areanumber);
+   AddMessage("The host rallied the co-op team.",MSG_SYSTEM);
+   }
+
+
+void ApplyCoopTestBoost(void)
+   {
+   int i;
+
+   if (!COOPMODE)
+      return;
+
+   /* The boost command is processed through the lockstep stream, keeping the
+      global damage override identical on every peer. */
+   godmode = true;
+
+   for (i=0;i<numplayers;i++)
+      {
+      playertype *pstate = &PLAYERSTATE[i];
+      objtype *ob = PLAYER[i];
+
+      if (!ob || (ob->flags & FL_DYING))
+         continue;
+
+      pstate->health = MaxHitpointsForCharacter(pstate);
+      ob->hitpoints = pstate->health;
+      pstate->keys |= 0x0f;
+      GiveWeapon(ob,wp_mp40);
+      /* GiveMissileWeapon drops the old launcher into the world. Repeating
+         that pickup path for the KES can dereference an empty map sprite, so
+         an already-boosted player only needs an ammo/health refresh. */
+      if (pstate->missileweapon != wp_kes)
+         GiveMissileWeapon(ob,wp_kes);
+      pstate->ammo = -1;
+      }
+
+   AddMessage("Co-op test boost and god mode enabled.",MSG_SYSTEM);
+   }
+
+
+void ApplyCoopKillAll(void)
+   {
+   objtype *ob;
+
+   if (!COOPMODE)
+      return;
+
+   for (ob=firstactive;ob;ob=ob->nextactive)
+      {
+      if ((ob->obclass < lowguardobj) ||
+          (ob->obclass > b_robobossobj) ||
+          (ob->flags & (FL_DYING|FL_HEAD)) ||
+          !(ob->flags & FL_SHOOTABLE))
+         continue;
+
+      DamageThing(ob,0x7fff);
+      Collision(ob,PLAYER[0],0,0);
+      }
+
+   AddMessage("Host defeated all active enemies.",MSG_CHEAT);
+   }
+
+
+void ApplyCoopPowerup(int playernum,int powerup)
+   {
+   objtype *ob;
+
+   if (!COOPMODE || (playernum < 0) || (playernum >= numplayers) ||
+       ((powerup != stat_godmode) && (powerup != stat_dogmode)))
+      return;
+
+   ob=PLAYER[playernum];
+   if (!ob || (ob->flags & FL_DYING))
+      return;
+
+   /* Use a real, immediately consumed map pickup so the test exercises the
+      same transformation, weapon, timer, sound and cleanup paths as a level. */
+   SpawnStatic(ob->tilex,ob->tiley,powerup,-1);
+   LASTSTAT->z=ob->z;
+   MakeStatActive(LASTSTAT);
+   LASTSTAT->flags|=FL_ABP;
+   GetBonus(ob,LASTSTAT);
+   }
+
+
 
 void PlayerSlideMove(objtype * ob)
 {int tryx, tryy, tryz;
@@ -4142,7 +4416,7 @@ void SetNormalHorizon (objtype * ob)
       }
    else if (ob->flags&FL_GODMODE)
       {
-      SetPlayerHorizon(pstate,GODYZANGLE);
+      SetPlayerHorizon(pstate,COOPMODE ? NORMALYZANGLE : GODYZANGLE);
       }
    else
       {
@@ -4924,6 +5198,9 @@ void  T_BatBlast (objtype *ob)
 void  T_Free (objtype *ob)
 {
 	attack_t   *cur;
+	playertype *pstate;
+
+	M_LINKSTATE(ob,pstate);
 
 
   if (!ob->ticcount)
@@ -4948,30 +5225,30 @@ void  T_Free (objtype *ob)
 
 
 
-  cur = &(FREE.attackinfo[locplayerstate->attackframe]);
+  cur = &(FREE.attackinfo[pstate->attackframe]);
 
-	if (!locplayerstate->attackcount)
+	if (!pstate->attackcount)
 	 {
-		if ((locplayerstate->weaponframe > 3) && (locplayerstate->weaponframe < 8))
-		  locplayerstate->NETCAPTURED ++;
-		else if (locplayerstate->weaponframe == 8)
+		if ((pstate->weaponframe > 3) && (pstate->weaponframe < 8))
+		  pstate->NETCAPTURED ++;
+		else if (pstate->weaponframe == 8)
 		 {
-			  locplayerstate->NETCAPTURED = -2;
+			  pstate->NETCAPTURED = -2;
 			  MISCVARS->NET_IN_FLIGHT = false;
 			  NewState(ob,&s_player);
-			  locplayerstate->weapondowntics = FREE.screenheight/GMOVE;
+			  pstate->weapondowntics = FREE.screenheight/GMOVE;
 		  return;
 		 }
 
-		locplayerstate->attackframe++;
-		cur = &(FREE.attackinfo[locplayerstate->attackframe]);
-		locplayerstate->weaponframe = cur->frame;
+		pstate->attackframe++;
+		cur = &(FREE.attackinfo[pstate->attackframe]);
+		pstate->weaponframe = cur->frame;
 
-		locplayerstate->attackcount = cur->mtics;
+		pstate->attackcount = cur->mtics;
 
 	 }
 	else
-	 locplayerstate->attackcount --;
+	 pstate->attackcount --;
  }
 
 
@@ -6179,12 +6456,20 @@ void T_DeadWait(objtype*ob)
 		 pstate->oldheightoffset = pstate->heightoffset;
 		}
 
-   if (ob==player)
+	if ( ( ob == player ) || COOPMODE )
       {
-      UpdateLightLevel(player->areanumber);
+		if ( ob == player )
+         UpdateLightLevel(player->areanumber);
       if ((pstate->falling==true) || (ob->momentumz==0))
          {
-         if (BATTLEMODE)
+         if (COOPMODE)
+            {
+            if (CheckParm("cooprestart") != 0)
+               playstate = ex_died;
+            else if (ob == player)
+               playerdead=true;
+            }
+         else if (BATTLEMODE)
 				playerdead=true;
          else
 			   playstate = ex_died;

@@ -24,6 +24,14 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include <ctype.h>
 #include <stdarg.h>
 
+#ifdef PLATFORM_WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOUSER
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#pragma comment(lib, "ws2_32.lib")
+#endif
+
 #ifdef DOS
 #include <conio.h>
 #include <dos.h>
@@ -83,6 +91,197 @@ static void WriteUDPPacket()
 
 #endif
 
+#ifdef PLATFORM_WIN32
+
+#define ROTT_DEFAULT_PORT 34858
+#define ROTT_NET_MAGIC    0x504f4352UL /* "RCOP" */
+#define ROTT_HELLO        1
+#define ROTT_WELCOME      2
+
+typedef struct
+   {
+   unsigned long magic;
+   unsigned char type;
+   unsigned char player;
+   unsigned char players;
+   unsigned char reserved;
+   } rott_udp_handshake_t;
+
+static SOCKET udp_socket = INVALID_SOCKET;
+static struct sockaddr_in udp_peer;
+static bool udp_is_server = false;
+static bool udp_loopback_ready = false;
+static short udp_loopback_length = 0;
+static byte udp_loopback_data[MAXCOMBUFFERSIZE];
+
+static int ROTT_Port(void)
+   {
+   int arg = CheckParm("port");
+   int port = ROTT_DEFAULT_PORT;
+
+   if (arg && (arg < _argc - 1))
+      port = atoi(_argv[arg + 1]);
+   if ((port < 1) || (port > 65535))
+      Error("Invalid network port %d.\n",port);
+   return port;
+   }
+
+static void ROTT_SetNonBlocking(void)
+   {
+   u_long enabled = 1;
+   if (ioctlsocket(udp_socket,FIONBIO,&enabled) == SOCKET_ERROR)
+      Error("Could not make the network socket non-blocking (%d).\n",
+         WSAGetLastError());
+   }
+
+static void ROTT_InitUDP(void)
+   {
+   WSADATA winsock;
+   struct sockaddr_in local;
+   rott_udp_handshake_t message;
+   int port = ROTT_Port();
+   int addrlen;
+   int received;
+   int netarg;
+
+   if (WSAStartup(MAKEWORD(2,2),&winsock) != 0)
+      Error("Could not initialize Winsock.\n");
+
+   udp_socket = socket(AF_INET,SOCK_DGRAM,IPPROTO_UDP);
+   if (udp_socket == INVALID_SOCKET)
+      Error("Could not create UDP socket (%d).\n",WSAGetLastError());
+
+   memset(&local,0,sizeof(local));
+   local.sin_family = AF_INET;
+   local.sin_addr.s_addr = htonl(INADDR_ANY);
+   local.sin_port = htons(CheckParm("server") ? port : 0);
+   if (bind(udp_socket,(struct sockaddr *)&local,sizeof(local)) == SOCKET_ERROR)
+      Error("Could not bind UDP port %d (%d).\n",port,WSAGetLastError());
+
+   memset(&message,0,sizeof(message));
+   message.magic = ROTT_NET_MAGIC;
+
+   if (CheckParm("server"))
+      {
+      struct sockaddr_in from;
+
+      udp_is_server = true;
+      printf("Waiting for a co-op player on UDP port %d...\n",port);
+      fflush(stdout);
+      do
+         {
+         addrlen = sizeof(from);
+         received = recvfrom(udp_socket,(char *)&message,sizeof(message),0,
+            (struct sockaddr *)&from,&addrlen);
+         }
+      while ((received != sizeof(message)) ||
+         (message.magic != ROTT_NET_MAGIC) || (message.type != ROTT_HELLO));
+
+      udp_peer = from;
+      message.type = ROTT_WELCOME;
+      message.player = 2; /* raw ROTT node; fixed to player 1 by rt_net.c */
+      message.players = 2;
+      sendto(udp_socket,(const char *)&message,sizeof(message),0,
+         (struct sockaddr *)&udp_peer,sizeof(udp_peer));
+      printf("Co-op player connected.\n");
+      fflush(stdout);
+      }
+   else
+      {
+      struct addrinfo hints;
+      struct addrinfo *addresses = NULL;
+      char porttext[16];
+      int attempts = 0;
+      DWORD timeout = 500;
+
+      netarg = CheckParm("net");
+      if (!netarg || (netarg >= _argc - 1))
+         Error("Client usage: -net <host address> [-port <port>]\n");
+
+      memset(&hints,0,sizeof(hints));
+      hints.ai_family = AF_INET;
+      hints.ai_socktype = SOCK_DGRAM;
+      sprintf(porttext,"%d",port);
+      if (getaddrinfo(_argv[netarg + 1],porttext,&hints,&addresses) != 0)
+         Error("Could not resolve co-op host '%s'.\n",_argv[netarg + 1]);
+      memcpy(&udp_peer,addresses->ai_addr,sizeof(udp_peer));
+      freeaddrinfo(addresses);
+
+      setsockopt(udp_socket,SOL_SOCKET,SO_RCVTIMEO,(const char *)&timeout,
+         sizeof(timeout));
+      printf("Connecting to co-op host %s:%d...\n",_argv[netarg + 1],port);
+      fflush(stdout);
+      message.type = ROTT_HELLO;
+      do
+         {
+         sendto(udp_socket,(const char *)&message,sizeof(message),0,
+            (struct sockaddr *)&udp_peer,sizeof(udp_peer));
+         addrlen = sizeof(udp_peer);
+         received = recvfrom(udp_socket,(char *)&message,sizeof(message),0,
+            (struct sockaddr *)&udp_peer,&addrlen);
+         attempts++;
+         if (attempts >= 120)
+            Error("Timed out connecting to the co-op host.\n");
+         }
+      while ((received != sizeof(message)) ||
+         (message.magic != ROTT_NET_MAGIC) || (message.type != ROTT_WELCOME));
+
+      rottcom->consoleplayer = message.player;
+      rottcom->numplayers = message.players;
+      printf("Connected as player %d.\n",message.player - 1);
+      fflush(stdout);
+      }
+
+   ROTT_SetNonBlocking();
+   }
+
+static void ReadUDPPacket(void)
+   {
+   struct sockaddr_in from;
+   int fromlen = sizeof(from);
+   int received;
+
+   rottcom->remotenode = -1;
+   if (udp_loopback_ready)
+      {
+      memcpy(rottcom->data,udp_loopback_data,udp_loopback_length);
+      rottcom->datalength = udp_loopback_length;
+      rottcom->remotenode = 1;
+      udp_loopback_ready = false;
+      return;
+      }
+
+   received = recvfrom(udp_socket,(char *)rottcom->data,MAXCOMBUFFERSIZE,0,
+      (struct sockaddr *)&from,&fromlen);
+   if (received == SOCKET_ERROR)
+      {
+      int error = WSAGetLastError();
+      if ((error == WSAEWOULDBLOCK) || (error == WSAECONNRESET))
+         return;
+      Error("UDP receive failed (%d).\n",error);
+      }
+
+   rottcom->datalength = (short)received;
+   rottcom->remotenode = udp_is_server ? 2 : 1;
+   }
+
+static void WriteUDPPacket(void)
+   {
+   if (udp_is_server && (rottcom->remotenode == 1))
+      {
+      memcpy(udp_loopback_data,rottcom->data,rottcom->datalength);
+      udp_loopback_length = rottcom->datalength;
+      udp_loopback_ready = true;
+      return;
+      }
+
+   if (sendto(udp_socket,(const char *)rottcom->data,rottcom->datalength,0,
+      (struct sockaddr *)&udp_peer,sizeof(udp_peer)) == SOCKET_ERROR)
+      Error("UDP send failed (%d).\n",WSAGetLastError());
+   }
+
+#endif
+
 /*
 ===============
 =
@@ -106,7 +305,7 @@ void InitROTTNET (void)
 
 	netaddress=atol(_argv[netarg]);
 	rottcom=(rottcom_t *)netaddress;
-#elif defined(PLATFORM_UNIX)
+#elif defined(PLATFORM_UNIX) || defined(PLATFORM_WIN32)
 	/*
 	server-specific options:
 	-net: enables netplay
@@ -158,6 +357,10 @@ void InitROTTNET (void)
         	/* numplayers will be initialized after connecting */
         	/* remoteridicule will be initialized after connecting */
         }
+
+#ifdef PLATFORM_WIN32
+        ROTT_InitUDP();
+#endif
         
         /* client-server negotiation protocol, as inspired by ipxsetup.c */
         /*
@@ -229,7 +432,7 @@ bool ReadPacket (void)
 
 #ifdef DOS
 	int386(rottcom->intnum,&comregs,&comregs);
-#elif PLATFORM_UNIX
+#elif defined(PLATFORM_UNIX) || defined(PLATFORM_WIN32)
 	ReadUDPPacket();
 #endif
 
@@ -325,7 +528,7 @@ void WritePacket (void * buffer, int len, int destination)
    // Send It !
 #ifdef DOS
 	int386(rottcom->intnum,&comregs,&comregs);
-#elif PLATFORM_UNIX
+#elif defined(PLATFORM_UNIX) || defined(PLATFORM_WIN32)
 	WriteUDPPacket();
 #endif
 

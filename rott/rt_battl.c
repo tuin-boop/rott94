@@ -102,6 +102,7 @@ int   BATTLE_It;
 bool BATTLE_ShowKillCount;
 
 bool BATTLEMODE = false;
+bool COOPMODE = false;
 
 /*---------------------------------------------------------------------
 	Function Prototypes:
@@ -152,6 +153,7 @@ void BATTLE_Init
 	BattleMode = battlemode;
 
 	BATTLEMODE = false;
+   COOPMODE = ( BattleMode == battle_Coop );
 
    UpdateKills = true;
 
@@ -169,7 +171,7 @@ void BATTLE_Init
    gamestate.BattleOptions.WeaponPersistence = false;
 	gamestate.BattleOptions.SpawnMines    = false;
 
-	if ( BattleMode != battle_StandAloneGame )
+	if ( ( BattleMode != battle_StandAloneGame ) && !COOPMODE )
 		{
 		BATTLEMODE = true;
 
@@ -273,6 +275,7 @@ void BATTLE_Init
 	switch( BattleMode )
 		{
 		case battle_StandAloneGame :
+		case battle_Coop :
 			KillsEndGame      = false;
 			KeepTrackOfKills  = false;
 			break;
@@ -355,7 +358,7 @@ void BATTLE_Init
 			break;
 		}
 
-	if ( BattleMode != battle_StandAloneGame )
+	if ( ( BattleMode != battle_StandAloneGame ) && !COOPMODE )
 		{
 		if ( BattleOptions.RespawnItems )
 			{
@@ -487,8 +490,9 @@ void BATTLE_Shutdown
    Timer             = 0;
    RoundOver         = false;
    BattleRound       = 0;
-   BattleMode        = battle_StandAloneGame;
-   BATTLEMODE        = false;
+	BattleMode        = battle_StandAloneGame;
+	BATTLEMODE        = false;
+   COOPMODE          = false;
    NumberOfPlayers   = 1;
    BATTLE_NumberOfTeams = 1;
    PointGoal         = 0;

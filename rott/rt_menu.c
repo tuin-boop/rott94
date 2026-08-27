@@ -177,7 +177,8 @@ static char *BattleModeDescriptions[ battle_NumBattleModes - 1 ] =
    "Tag your enemies.  Run away.  Lowest points wins.",
    "Chase roving 'Eluders'--tag them for points.",
    "Use weapons to destroy roving Eluder triads for points.",
-   "Capture the opposing team's triad while guarding your own."
+   "Capture the opposing team's triad while guarding your own.",
+   "Fight through the campaign together. Players can pass through allies."
    };
 
 static char *BattleOptionDescriptions[ 9 ] =
@@ -282,7 +283,8 @@ static char *TimeLimitOptionDescriptions[ 8 ] =
 static char *BattleModeNames[ battle_NumBattleModes - 1 ] =
    {
    "NORMAL COMM-BAT", "SCORE MORE", "COLLECTOR", "SCAVENGER",
-   "HUNTER", "TAG", "ELUDER", "DELUDER", "CAPTURE THE TRIAD"
+   "HUNTER", "TAG", "ELUDER", "DELUDER", "CAPTURE THE TRIAD",
+   "CO-OP CAMPAIGN"
    };
 
 static int OptionNums[ 12 ] =
@@ -878,10 +880,11 @@ CP_MenuNames ModeMenuNames[] =
    "TAG",
    "ELUDER",
    "DELUDER",
-   "CAPTURE THE TRIAD"
+   "CAPTURE THE TRIAD",
+   "CO-OP CAMPAIGN"
    };
 
-CP_iteminfo ModeItems = { MENU_X, MENU_Y + 1, 9, 0, 24, ModeMenuNames, mn_largefont };
+CP_iteminfo ModeItems = { MENU_X, MENU_Y + 1, 10, 0, 21, ModeMenuNames, mn_largefont };
 
 CP_itemtype ModeMenu[] =
 {
@@ -893,7 +896,8 @@ CP_itemtype ModeMenu[] =
    {CP_Active,         "tag\0",      'T', (menuptr)CP_BattleMenu},
    {CP_Active,         "eluder\0",   'E', (menuptr)CP_BattleMenu},
    {CP_Active,         "deluder\0",  'D', (menuptr)CP_BattleMenu},
-   {CP_Active,         "captriad\0", 'C', (menuptr)CP_BattleMenu}
+   {CP_Active,         "captriad\0", 'C', (menuptr)CP_BattleMenu},
+   {CP_Active,         "coop\0",     'O', (menuptr)CP_BattleMenu}
 };
 
 CP_MenuNames BOptNames[] =
@@ -1598,9 +1602,20 @@ void SetUpControlPanel (void)
       // No save or load game in modem game
       //
       MainMenu[newgame].active    = CP_Inactive;
-      MainMenu[backtodemo].active = CP_Inactive;
       MainMenu[loadgame].active   = CP_Inactive;
       MainMenu[savegame].active   = CP_Inactive;
+
+      /*
+       * Campaign co-op enters the regular control panel, unlike the original
+       * battle modes.  It must always have a way back into the running game.
+       */
+      if (COOPMODE)
+         {
+         MainMenu[backtodemo].active = CP_Active;
+         MainItems.curpos = backtodemo;
+         }
+      else
+         MainMenu[backtodemo].active = CP_Inactive;
 
       if ( MainMenu[ MainItems.curpos ].active == CP_Inactive )
          {
@@ -1888,7 +1903,13 @@ menuitems CP_MainMenu
 
 #if !defined(__ANDROID__) && !defined(__WINRT__)
          case -1:
-            CP_Quit( 0 );
+            if (COOPMODE && ingame)
+               {
+               StartGame = true;
+               DisableScreenStretch();
+               }
+            else
+               CP_Quit( 0 );
             break;
 #endif
 
@@ -5667,8 +5688,11 @@ void DrawBattleMenu (void)
    DrawMenu (&BattleItems, &BattleMenu[0]);
    DisplayInfo (0);
 
-   BATTLE_SetOptions( &BATTLE_Options[ gamestate.battlemode ] );
-   ShowBattleOptions( true, MENU_X, MENU_Y + 49 );
+   if (!COOPMODE && gamestate.battlemode != battle_Coop)
+      {
+      BATTLE_SetOptions( &BATTLE_Options[ gamestate.battlemode ] );
+      ShowBattleOptions( true, MENU_X, MENU_Y + 49 );
+      }
 
    if (ingame && inmenu && (!numdone))
       RefreshMenuBuf (0);
@@ -5750,7 +5774,7 @@ void BattleGamePlayerSetup( void )
 			      DisableScreenStretch();
                handlewhich = -2;
                playstate   = ex_resetgame;
-               BATTLEMODE  = true;
+               BATTLEMODE  = !COOPMODE;
                // Show please wait
                CP_ModemGameMessage( consoleplayer );
                return;
@@ -5804,9 +5828,12 @@ void CP_BattleMenu (void)
    int which;
 
    gamestate.battlemode = handlewhich + battle_Normal;
+   COOPMODE = (gamestate.battlemode == battle_Coop);
+   BATTLEMODE = !COOPMODE;
 
    BattleMenu[0].active = CP_Active;
    BattleMenu[1].active = CP_Active;
+   BattleMenu[2].active = CP_Active;
 
 
    // Tag can't be played in team mode
@@ -5829,6 +5856,15 @@ void CP_BattleMenu (void)
          {
          BattleItems.curpos = 1;
          }
+      }
+
+   if (COOPMODE)
+      {
+      BattleMenu[1].active = CP_Inactive;
+      BattleMenu[2].active = CP_Inactive;
+      gamestate.teamplay = false;
+      if (BattleItems.curpos > 0)
+         BattleItems.curpos = 0;
       }
 
    BattleMenu[ BattleItems.curpos ].active = CP_CursorLocation;
@@ -6654,6 +6690,7 @@ void DrawBattleModes
       TURN_OFF_BATTLE_MODE( battle_Tag );
       TURN_OFF_BATTLE_MODE( battle_Hunter );
       TURN_OFF_BATTLE_MODE( battle_CaptureTheTriad );
+      TURN_OFF_BATTLE_MODE( battle_Coop );
       }
 
    if ( ModeMenu[ ModeItems.curpos ].active != CP_CursorLocation )
@@ -6692,7 +6729,7 @@ void DrawBattleModeName( int which )
    font_t *temp;
 
 
-   if ( ( which < battle_Normal ) || ( which > battle_CaptureTheTriad ) )
+   if ( ( which < battle_Normal ) || ( which > battle_Coop ) )
       {
       return;
       }
@@ -6740,6 +6777,7 @@ void DrawBattleModeDescription( int w )
          case battle_Tag :
          case battle_Hunter :
          case battle_CaptureTheTriad :
+         case battle_Coop :
             string = "This mode can only be played with 2 or more players.";
             break;
          }
@@ -6802,6 +6840,7 @@ void CP_BattleModes ( void )
 
    damagecount = 0;
    BATTLEMODE  = true;
+   COOPMODE    = false;
 
    do
       {
@@ -6815,6 +6854,7 @@ void CP_BattleModes ( void )
    if ( !StartGame )
       {
       BATTLEMODE = false;
+      COOPMODE = false;
       gamestate.battlemode = battle_StandAloneGame;
       }
    }
@@ -8180,6 +8220,7 @@ void ShowBattleOptions
 	battle_type BatOps;
    char *string;
    char text[ 80 ];
+   char mapfilename[ MAX_PATH ];
    int  width;
    int  height;
    int  temp;
@@ -8248,8 +8289,8 @@ void ShowBattleOptions
       }
    ShowBattleOption( inmenu, PosX, PosY, 0, 9, "Danger Damage", string );
 
-   GetMapFileName ( text );
-   ShowBattleOption( inmenu, PosX, PosY, 0, 10, "Filename", text );
+   GetMapFileName ( mapfilename );
+   ShowBattleOption( inmenu, PosX, PosY, 0, 10, "Filename", mapfilename );
 
    itoa( numplayers, text, 10 );
    ShowBattleOption( inmenu, PosX, PosY, 1, 1, "Players", text );

@@ -2411,6 +2411,22 @@ void RespawnPlayerobj(objtype *ob)
 
  M_LINKSTATE(ob,pstate);
 
+ if (COOPMODE)
+     {
+      /* Campaign co-op uses the map's normal start as its checkpoint. */
+      nx = FIRST.x;
+      ny = FIRST.y;
+      ndir = FIRST.dir;
+
+      oldsetupgame = insetupgame;
+      insetupgame = true;
+      FindEmptyTile(&nx,&ny);
+      insetupgame = oldsetupgame;
+
+      RevivePlayerobj(nx,ny,ndir,ob);
+      return;
+     }
+
  if (gamestate.battlemode != battle_CaptureTheTriad)
      {
       rand = (GameRandomNumber("playerobj respawn",0) % NUMSPAWNLOCATIONS);
@@ -2719,7 +2735,12 @@ void SetupPlayers( void )
    numplayers = 2;
    AssignTeams();*/
 
-   if (!BATTLEMODE)
+   if (COOPMODE)
+		{
+		for (i = 0; i < numplayers; i++)
+			SpawnPlayerobj(FIRST.x,FIRST.y,FIRST.dir,i);
+		}
+   else if (!BATTLEMODE)
 		{
 		if (tedlevel)
 			{
@@ -5975,6 +5996,12 @@ void SetupGameLevel (void)
 	insetupgame=false;
 
 	tedlevel = false;   // turn it off once we have done any ted stuff
+
+   if (COOPMODE)
+      {
+      ResetCoopPlayerPresentation();
+      ResetFocalWidth();
+      }
 	
 	EnableScreenStretch();
 }

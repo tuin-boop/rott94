@@ -85,6 +85,7 @@ enum
    battle_Eluder,
    battle_Deluder,
 	battle_CaptureTheTriad,
+   battle_Coop,
    battle_NumBattleModes
    };
 
@@ -196,6 +197,7 @@ typedef struct
 #define bo_normal_respawn_time 30
 
 extern bool  BATTLEMODE;
+extern bool  COOPMODE;
 extern short    WhoKilledWho[ MAXPLAYERS ][ MAXPLAYERS ];
 extern short    BATTLE_Points[ MAXPLAYERS ];
 extern short    BATTLE_PlayerOrder[ MAXPLAYERS ];
