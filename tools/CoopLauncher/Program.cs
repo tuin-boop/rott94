@@ -1,0 +1,252 @@
+using System;
+using System.Diagnostics;
+using System.Drawing;
+using System.Linq;
+using System.Net;
+using System.Net.NetworkInformation;
+using System.Net.Sockets;
+using System.Windows.Forms;
+
+namespace Rott94CoopLauncher
+{
+    internal static class Program
+    {
+        [STAThread]
+        private static void Main()
+        {
+            Application.EnableVisualStyles();
+            Application.SetCompatibleTextRenderingDefault(false);
+            Application.Run(new LauncherForm());
+        }
+    }
+
+    internal sealed class LauncherForm : Form
+    {
+        private const string GameExe = "Rott94.Windows.Release.exe";
+        private static readonly Color Background = Color.FromArgb(22, 18, 15);
+        private static readonly Color Card = Color.FromArgb(43, 35, 29);
+        private static readonly Color Gold = Color.FromArgb(226, 166, 53);
+        private static readonly Color Cream = Color.FromArgb(232, 220, 190);
+        private static readonly Color Red = Color.FromArgb(151, 42, 31);
+        private static readonly Color Green = Color.FromArgb(72, 121, 68);
+
+        private readonly TextBox joinAddress;
+        private readonly CheckBox windowed;
+        private readonly CheckBox skipIntro;
+        private readonly Label status;
+        private readonly string localAddress;
+
+        public LauncherForm()
+        {
+            localAddress = FindLanAddress();
+
+            Text = "ROTT94 Co-op Launcher";
+            ClientSize = new Size(520, 390);
+            FormBorderStyle = FormBorderStyle.FixedSingle;
+            MaximizeBox = false;
+            StartPosition = FormStartPosition.CenterScreen;
+            BackColor = Background;
+            ForeColor = Cream;
+            Font = new Font("Segoe UI", 9F);
+
+            Controls.Add(MakeLabel("▲  ROTT94 CO-OP", 22, 18, 476, 38, Gold, 20F, FontStyle.Bold));
+            Controls.Add(MakeLabel("Two players. One campaign. Ludicrous teamwork.", 24, 57, 470, 24,
+                Color.FromArgb(180, 170, 145), 9.5F, FontStyle.Regular));
+
+            Panel hostCard = MakeCard(20, 92, 480, 92);
+            hostCard.Controls.Add(MakeLabel("HOST A GAME", 16, 12, 175, 24, Gold, 11F, FontStyle.Bold));
+            hostCard.Controls.Add(MakeLabel("Your LAN address:", 16, 42, 115, 22, Cream, 9F, FontStyle.Regular));
+            Label address = MakeLabel(localAddress, 132, 40, 170, 25, Color.White, 10.5F, FontStyle.Bold);
+            hostCard.Controls.Add(address);
+            Button copy = MakeButton("COPY IP", 305, 34, 72, 32, Card, Gold);
+            copy.Click += delegate { Clipboard.SetText(localAddress); SetStatus("LAN address copied."); };
+            hostCard.Controls.Add(copy);
+            Button host = MakeButton("HOST", 386, 20, 78, 52, Green, Color.White);
+            host.Click += delegate { LaunchHost(); };
+            hostCard.Controls.Add(host);
+            Controls.Add(hostCard);
+
+            Panel joinCard = MakeCard(20, 196, 480, 92);
+            joinCard.Controls.Add(MakeLabel("JOIN A GAME", 16, 12, 175, 24, Gold, 11F, FontStyle.Bold));
+            joinAddress = new TextBox
+            {
+                Location = new Point(16, 43),
+                Size = new Size(350, 25),
+                BackColor = Color.FromArgb(28, 24, 21),
+                ForeColor = Color.White,
+                BorderStyle = BorderStyle.FixedSingle,
+                Font = new Font("Consolas", 10F),
+                Text = "192.168.1."
+            };
+            joinAddress.KeyDown += delegate(object sender, KeyEventArgs e)
+            {
+                if (e.KeyCode == Keys.Enter) LaunchClient();
+            };
+            joinCard.Controls.Add(joinAddress);
+            Button join = MakeButton("JOIN", 386, 20, 78, 52, Red, Color.White);
+            join.Click += delegate { LaunchClient(); };
+            joinCard.Controls.Add(join);
+            Controls.Add(joinCard);
+
+            windowed = MakeCheckBox("Windowed", 24, 307, true);
+            skipIntro = MakeCheckBox("Skip intro", 130, 307, true);
+            Controls.Add(windowed);
+            Controls.Add(skipIntro);
+            Controls.Add(MakeLabel("2 players  •  UDP 34858  •  Same build on both PCs", 244, 307, 255, 22,
+                Color.FromArgb(155, 145, 125), 8.5F, FontStyle.Regular));
+
+            status = MakeLabel("Ready. Allow the game through Windows Firewall on Private networks.",
+                24, 346, 472, 25, Cream, 8.8F, FontStyle.Regular);
+            Controls.Add(status);
+        }
+
+        private void LaunchHost()
+        {
+            if (LaunchGame("-net -server -players 2" + CommonArguments()))
+                SetStatus("Host started. Give your friend " + localAddress + " and wait before choosing Co-op Campaign.");
+        }
+
+        private void LaunchClient()
+        {
+            IPAddress parsed;
+            string address = joinAddress.Text.Trim();
+            if (!IPAddress.TryParse(address, out parsed) || parsed.AddressFamily != AddressFamily.InterNetwork)
+            {
+                MessageBox.Show(this, "Enter the host's IPv4 address, for example 192.168.1.42.",
+                    "Invalid host address", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                joinAddress.Focus();
+                return;
+            }
+
+            if (LaunchGame("-net " + address + CommonArguments()))
+                SetStatus("Joining " + address + "…");
+        }
+
+        private string CommonArguments()
+        {
+            string args = windowed.Checked ? " -window" : "";
+            if (skipIntro.Checked) args += " -nowait";
+            return args;
+        }
+
+        private bool LaunchGame(string arguments)
+        {
+            string folder = Application.StartupPath;
+            string game = System.IO.Path.Combine(folder, GameExe);
+            string gameData = System.IO.Path.Combine(folder, "assets", "darkwar.wad");
+            if (!System.IO.File.Exists(game))
+            {
+                MessageBox.Show(this,
+                    "Place Rott94CoopLauncher.exe beside " + GameExe + ".\n\nExpected:\n" + game,
+                    "Game not found", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return false;
+            }
+
+            if (!System.IO.File.Exists(gameData))
+            {
+                MessageBox.Show(this,
+                    "The registered game data was not found.\n\nPlace DARKWAR.WAD in:\n" +
+                    System.IO.Path.Combine(folder, "assets"),
+                    "Game data not found", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return false;
+            }
+
+            try
+            {
+                Process.Start(new ProcessStartInfo(game, arguments)
+                {
+                    WorkingDirectory = folder,
+                    UseShellExecute = true
+                });
+                return true;
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, ex.Message, "Could not start ROTT94",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return false;
+            }
+        }
+
+        private void SetStatus(string text)
+        {
+            status.Text = text;
+        }
+
+        private static string FindLanAddress()
+        {
+            try
+            {
+                var candidates = NetworkInterface.GetAllNetworkInterfaces()
+                    .Where(n => n.OperationalStatus == OperationalStatus.Up &&
+                                n.NetworkInterfaceType != NetworkInterfaceType.Loopback)
+                    .SelectMany(n => n.GetIPProperties().UnicastAddresses)
+                    .Select(a => a.Address)
+                    .Where(a => a.AddressFamily == AddressFamily.InterNetwork && !IPAddress.IsLoopback(a))
+                    .ToArray();
+
+                IPAddress privateAddress = candidates.FirstOrDefault(a =>
+                    a.GetAddressBytes()[0] == 10 ||
+                    (a.GetAddressBytes()[0] == 172 && a.GetAddressBytes()[1] >= 16 && a.GetAddressBytes()[1] <= 31) ||
+                    (a.GetAddressBytes()[0] == 192 && a.GetAddressBytes()[1] == 168));
+
+                return (privateAddress ?? candidates.FirstOrDefault() ?? IPAddress.Loopback).ToString();
+            }
+            catch
+            {
+                return "127.0.0.1";
+            }
+        }
+
+        private static Panel MakeCard(int x, int y, int width, int height)
+        {
+            return new Panel { Location = new Point(x, y), Size = new Size(width, height), BackColor = Card };
+        }
+
+        private static Label MakeLabel(string text, int x, int y, int width, int height,
+            Color color, float size, FontStyle style)
+        {
+            return new Label
+            {
+                Text = text,
+                Location = new Point(x, y),
+                Size = new Size(width, height),
+                ForeColor = color,
+                Font = new Font("Segoe UI", size, style),
+                TextAlign = ContentAlignment.MiddleLeft
+            };
+        }
+
+        private static Button MakeButton(string text, int x, int y, int width, int height,
+            Color back, Color fore)
+        {
+            Button button = new Button
+            {
+                Text = text,
+                Location = new Point(x, y),
+                Size = new Size(width, height),
+                BackColor = back,
+                ForeColor = fore,
+                FlatStyle = FlatStyle.Flat,
+                Font = new Font("Segoe UI", 9F, FontStyle.Bold),
+                Cursor = Cursors.Hand
+            };
+            button.FlatAppearance.BorderColor = Gold;
+            button.FlatAppearance.BorderSize = 1;
+            return button;
+        }
+
+        private static CheckBox MakeCheckBox(string text, int x, int y, bool value)
+        {
+            return new CheckBox
+            {
+                Text = text,
+                Location = new Point(x, y),
+                Size = new Size(100, 23),
+                Checked = value,
+                ForeColor = Cream,
+                BackColor = Background
+            };
+        }
+    }
+}

@@ -39,6 +39,20 @@ menus.
 The launcher intentionally uses the Win32 build. The inherited DOS-era engine
 still contains pointer-sized assumptions that make its x64 build unreliable.
 
+## Two computers on a LAN
+
+Build the small graphical launcher with:
+
+```powershell
+.\tools\CoopLauncher\build.ps1
+```
+
+Place `Rott94CoopLauncher.exe` beside `Rott94.Windows.Release.exe` in the
+portable game folder on both computers. The host clicks **HOST** and gives the
+displayed LAN address to the second player, who enters it and clicks **JOIN**.
+Allow the game through Windows Firewall on Private networks. No router port
+forwarding is required when both computers are on the same LAN.
+
 ## Co-op controls
 
 - `F12` on the host rallies the other player to the nearest safe empty tile
