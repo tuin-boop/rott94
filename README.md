@@ -14,6 +14,12 @@ no friendly fire, a host Rally command, and synchronized level transitions.
 See [COOP_TESTING.md](COOP_TESTING.md) for the current setup instructions,
 controls, and known limitations.
 
+**[Download the latest ready-to-run Windows co-op build](https://github.com/tuin-boop/rott94/releases/latest)**
+
+The download does not contain commercial game data. Its launcher can import
+the required files from an installed Steam copy of Rise of the Triad:
+Ludicrous Edition.
+
 ![Two-player ROTT94 campaign co-op](docs/images/rott94-coop.png)
 
 
