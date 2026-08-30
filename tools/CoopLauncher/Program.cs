@@ -1,7 +1,10 @@
 using System;
 using System.Diagnostics;
 using System.Drawing;
+using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using Microsoft.Win32;
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
@@ -35,6 +38,8 @@ namespace Rott94CoopLauncher
         private readonly CheckBox skipIntro;
         private readonly Label status;
         private readonly string localAddress;
+        private readonly List<Process> launchedProcesses = new List<Process>();
+        private readonly object diagnosticsLock = new object();
 
         public LauncherForm()
         {
@@ -132,8 +137,8 @@ namespace Rott94CoopLauncher
         private bool LaunchGame(string arguments)
         {
             string folder = Application.StartupPath;
-            string game = System.IO.Path.Combine(folder, GameExe);
-            if (!System.IO.File.Exists(game))
+            string game = Path.Combine(folder, GameExe);
+            if (!File.Exists(game))
             {
                 MessageBox.Show(this,
                     "Place Rott94CoopLauncher.exe beside " + GameExe + ".\n\nExpected:\n" + game,
@@ -146,11 +151,30 @@ namespace Rott94CoopLauncher
 
             try
             {
-                Process.Start(new ProcessStartInfo(game, arguments)
+                string diagnostics = Path.Combine(folder, "diagnostics");
+                Directory.CreateDirectory(diagnostics);
+                ConfigureCrashDumps(diagnostics);
+
+                Process process = Process.Start(new ProcessStartInfo(game, arguments)
                 {
                     WorkingDirectory = folder,
                     UseShellExecute = true
                 });
+                if (process == null)
+                    throw new InvalidOperationException("Windows did not return a game process.");
+
+                process.EnableRaisingEvents = true;
+                launchedProcesses.Add(process);
+                AppendDiagnostic(diagnostics, "Started PID " + process.Id + ": " + arguments);
+                process.Exited += delegate
+                {
+                    int exitCode;
+                    try { exitCode = process.ExitCode; }
+                    catch { exitCode = int.MinValue; }
+                    AppendDiagnostic(diagnostics, "PID " + process.Id + " exited with code " + exitCode + ".");
+                    lock (diagnosticsLock) { launchedProcesses.Remove(process); }
+                    process.Dispose();
+                };
                 return true;
             }
             catch (Exception ex)
@@ -158,6 +182,43 @@ namespace Rott94CoopLauncher
                 MessageBox.Show(this, ex.Message, "Could not start ROTT94",
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return false;
+            }
+        }
+
+        private void ConfigureCrashDumps(string diagnostics)
+        {
+            string dumpFolder = Path.Combine(diagnostics, "crash-dumps");
+            Directory.CreateDirectory(dumpFolder);
+
+            try
+            {
+                using (RegistryKey key = Registry.CurrentUser.CreateSubKey(
+                    @"Software\Microsoft\Windows\Windows Error Reporting\LocalDumps\" + GameExe))
+                {
+                    key.SetValue("DumpFolder", dumpFolder, RegistryValueKind.ExpandString);
+                    key.SetValue("DumpCount", 10, RegistryValueKind.DWord);
+                    key.SetValue("DumpType", 2, RegistryValueKind.DWord);
+                }
+            }
+            catch (Exception ex)
+            {
+                AppendDiagnostic(diagnostics, "Could not enable Windows crash dumps: " + ex.Message);
+            }
+        }
+
+        private void AppendDiagnostic(string diagnostics, string message)
+        {
+            try
+            {
+                lock (diagnosticsLock)
+                {
+                    File.AppendAllText(Path.Combine(diagnostics, "launcher-session.log"),
+                        DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + "  " + message + Environment.NewLine);
+                }
+            }
+            catch
+            {
+                // Diagnostics must never prevent the game from launching or exiting.
             }
         }
 

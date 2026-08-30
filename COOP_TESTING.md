@@ -56,6 +56,11 @@ offers a folder picker when Steam is installed in another library location.
 Allow the game through Windows Firewall on Private networks. No router port
 forwarding is required when both computers are on the same LAN.
 
+The launcher creates a `diagnostics` folder beside the executable. It records
+game process starts and exit codes in `launcher-session.log`, and configures
+Windows to place full crash dumps in `diagnostics\crash-dumps`. If a LAN test
+crashes, preserve that folder from the affected computer for diagnosis.
+
 ## Co-op controls
 
 - `F12` on the host rallies the other player to the nearest safe empty tile
