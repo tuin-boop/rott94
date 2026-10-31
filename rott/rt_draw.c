@@ -222,7 +222,8 @@ byte *AdvancedRendererGetTransPatchPixels(int lump)
 
 extern void AdvancedRendererDrawWorld(const word *tiles,
    const byte *specialOrientation,const word *specialTexture,
-   const signed short *specialPatches,const word *wallTextures,
+   const signed short *specialPatches,const byte *specialSkyOccluder,
+   const word *wallTextures,
    const signed short *wallAltTextures,
    int mapsize,int worldHeight,float playerx,float playery,float cameraHeight,
    float yaw,float pitch,const byte *floorPixels,const byte *ceilingPixels,
@@ -3046,6 +3047,7 @@ void      ThreeDRefresh (void)
       static byte specialOrientation[MAPSIZE*MAPSIZE];
       static word specialTexture[MAPSIZE*MAPSIZE];
       static signed short specialPatches[MAPSIZE*MAPSIZE*3];
+      static byte specialSkyOccluder[MAPSIZE*MAPSIZE];
       static word gpuWallTexture[MAPSIZE*MAPSIZE];
       static signed short gpuWallAlt[MAPSIZE*MAPSIZE];
       static float gpuSpriteX[MAXVISIBLE],gpuSpriteY[MAXVISIBLE];
@@ -3056,6 +3058,7 @@ void      ThreeDRefresh (void)
       int gpuSpriteCount=0;
       int gpuMovingWallCount=0;
       int gpuWeaponMain,gpuWeaponAlt,gpuWeaponX,gpuWeaponY;
+      int gpuRailingLump=W_GetNumForName("RAILING");
       statobj_t *gpuStat;
       objtype *gpuActor;
       int x,y;
@@ -3089,6 +3092,7 @@ void      ThreeDRefresh (void)
       BuildDynamicTorchLights();
       memset(specialOrientation,0,sizeof(specialOrientation));
       memset(specialTexture,0,sizeof(specialTexture));
+      memset(specialSkyOccluder,0,sizeof(specialSkyOccluder));
       for (x=0;x<MAPSIZE*MAPSIZE*3;x++) specialPatches[x]=-1;
       for (x=0;x<MAPSIZE*MAPSIZE;x++) gpuWallAlt[x]=-2;
       for (x=0;x<MAPSIZE;x++)
@@ -3114,6 +3118,12 @@ void      ThreeDRefresh (void)
                specialPatches[cell*3]=maskobjlist[index]->bottomtexture;
                specialPatches[cell*3+1]=maskobjlist[index]->midtexture;
                specialPatches[cell*3+2]=maskobjlist[index]->toptexture;
+               /* The software renderer stops world visibility at outdoor
+                  railings; transparent pixels reveal the already-drawn sky. */
+               specialSkyOccluder[cell]=
+                  maskobjlist[index]->bottomtexture==gpuRailingLump &&
+                  maskobjlist[index]->midtexture<0 &&
+                  maskobjlist[index]->toptexture<0;
                }
             }
 
@@ -3162,7 +3172,8 @@ void      ThreeDRefresh (void)
       if (SHOW_PLAYER_STATS())
          DrawStats();
       AdvancedRendererDrawWorld(&tilemap[0][0],specialOrientation,
-         specialTexture,specialPatches,gpuWallTexture,gpuWallAlt,
+         specialTexture,specialPatches,specialSkyOccluder,
+         gpuWallTexture,gpuWallAlt,
          MAPSIZE,levelheight,
          (float)player->x/(float)TILEGLOBAL,
          (float)player->y/(float)TILEGLOBAL,gpuCameraHeight,

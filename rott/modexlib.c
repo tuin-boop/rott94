@@ -916,7 +916,8 @@ bool AdvancedRendererActive(void)
 
 void AdvancedRendererDrawWorld(const word *tiles,const byte *specialOrientation,
 	const word *specialTexture,
-	const signed short *specialPatches,const word *wallTextures,
+	const signed short *specialPatches,const byte *specialSkyOccluder,
+	const word *wallTextures,
 	const signed short *wallAltTextures,
 	int mapsize,int worldHeight,float playerx,float playery,float cameraHeight,
 	float yaw,float pitch,
@@ -1020,6 +1021,41 @@ void AdvancedRendererDrawWorld(const word *tiles,const byte *specialOrientation,
 	maxx=(int)playerx+32; if(maxx>mapsize-2) maxx=mapsize-2;
 	miny=(int)playery-32; if(miny<1) miny=1;
 	maxy=(int)playery+32; if(maxy>mapsize-2) maxy=mapsize-2;
+
+	/* Classic masked-wall visibility terminates at outdoor railings.  Its
+	   transparent pixels therefore reveal the sky buffer, not map boundary
+	   geometry farther outside the playable area.  Reproduce that with a
+	   depth-only portal plane before drawing world geometry; the railing art
+	   itself is drawn later at the same depth with GL_LEQUAL. */
+	if (specialSkyOccluder && specialOrientation)
+	{
+		glColorMask(GL_FALSE,GL_FALSE,GL_FALSE,GL_FALSE);
+		glDepthMask(GL_TRUE);
+		glDisable(GL_TEXTURE_2D);
+		glBegin(GL_QUADS);
+		for (x=minx;x<=maxx;x++)
+			for (y=miny;y<=maxy;y++)
+			{
+				int cell=x*mapsize+y;
+				float x0=(float)x,x1=x0+1.0f;
+				float z0=(float)-y,z1=z0-1.0f;
+				if (!specialSkyOccluder[cell]) continue;
+				if (specialOrientation[cell]==1)
+				{
+					glVertex3f(x0+.5f,0,z0); glVertex3f(x0+.5f,0,z1);
+					glVertex3f(x0+.5f,(float)worldHeight,z1);
+					glVertex3f(x0+.5f,(float)worldHeight,z0);
+				}
+				else
+				{
+					glVertex3f(x0,0,z0-.5f); glVertex3f(x1,0,z0-.5f);
+					glVertex3f(x1,(float)worldHeight,z0-.5f);
+					glVertex3f(x0,(float)worldHeight,z0-.5f);
+				}
+			}
+		glEnd();
+		glColorMask(GL_TRUE,GL_TRUE,GL_TRUE,GL_TRUE);
+	}
 
 	/* Level-wide 128x128 flats repeat across the original tile grid. */
 	floorTexture=AdvancedPlaneTexture(floorPixels,&advancedFloorTexture,
