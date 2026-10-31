@@ -609,6 +609,21 @@ static void AdvancedMappedWallFace(int lump,int altLump,float worldHeight,
 			x1,worldHeight,z1,x0,worldHeight,z0);
 }
 
+static void AdvancedWallTop(int lump,float x0,float z0,float x1,float z1,
+	float worldHeight)
+{
+	GLuint texture=AdvancedWallTexture(lump);
+	if (!texture) return;
+	glEnable(GL_TEXTURE_2D);
+	glBindTexture(GL_TEXTURE_2D,texture);
+	glBegin(GL_QUADS);
+	glTexCoord2f(0,0); glVertex3f(x0,worldHeight,z0);
+	glTexCoord2f(1,0); glVertex3f(x1,worldHeight,z0);
+	glTexCoord2f(1,1); glVertex3f(x1,worldHeight,z1);
+	glTexCoord2f(0,1); glVertex3f(x0,worldHeight,z1);
+	glEnd();
+}
+
 static GLuint AdvancedPatchTexture(int lump,bool transparentPatch,
 	int *outWidth,int *outHeight,int *outOrigSize,
 	int *outLeftOffset,int *outTopOffset)
@@ -1216,9 +1231,26 @@ void AdvancedRendererDrawWorld(const word *tiles,const byte *specialOrientation,
 			AdvancedBillboard(spriteLump[x],spriteX[x],-spriteY[x],
 				spriteZ[x],yaw);
 		}
+	/* Free look exposes surfaces that the original fixed-horizon renderer
+	   could never see.  Close the tops of solid wall columns so outdoor
+	   structures are volumes rather than paper-thin vertical planes. */
 	for (x=minx;x<=maxx;x++)
 		for (y=miny;y<=maxy;y++)
-			if (tiles[x*mapsize+y]==0)
+		{
+			int cell=x*mapsize+y;
+			word wall=tiles[cell];
+			if (wall && !(wall&0x8000))
+			{
+				AdvancedSetTileLight(lightLevels,mapsize,x,y,
+					lightingEnabled,darkAmbient,coloredLights);
+				AdvancedWallTop(wallTextures ? wallTextures[cell] : wall,
+					(float)x,(float)-y,(float)x+1.0f,(float)-y-1.0f,
+					(float)worldHeight);
+			}
+		}
+	for (x=minx;x<=maxx;x++)
+		for (y=miny;y<=maxy;y++)
+			if (tiles[x*mapsize+y]==0 || (tiles[x*mapsize+y]&0x8000))
 			{
 				float x0=(float)x,x1=x0+1.0f;
 				float z0=(float)-y,z1=z0-1.0f;
@@ -1266,6 +1298,8 @@ void AdvancedRendererDrawWorld(const word *tiles,const byte *specialOrientation,
 				x0,z0,x1,z0);
 			AdvancedMappedWallFace(movingWallTexture[x],-2,(float)worldHeight,
 				x1,z1,x0,z1);
+			AdvancedWallTop(movingWallTexture[x],x0,z0,x1,z1,
+				(float)worldHeight);
 		}
 	/* First-person artwork is screen-space UI and must be the final world
 	   layer so depth-tested walls and sprites can never overwrite it. */
