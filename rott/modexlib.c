@@ -590,6 +590,24 @@ static void AdvancedWallFace(int lump,float x0,float y0,float z0,
 	glEnd();
 }
 
+static void AdvancedMappedWallFace(int lump,int altLump,float worldHeight,
+	float x0,float z0,float x1,float z1)
+{
+	if (altLump==-1)
+		return;
+	if (altLump>=0 && worldHeight>1.0f)
+	{
+		AdvancedWallFace(altLump,x0,0,z0,x1,0,z1,
+			x1,worldHeight-1.0f,z1,x0,worldHeight-1.0f,z0);
+		AdvancedWallFace(lump,x0,worldHeight-1.0f,z0,
+			x1,worldHeight-1.0f,z1,x1,worldHeight,z1,
+			x0,worldHeight,z0);
+	}
+	else
+		AdvancedWallFace(lump,x0,0,z0,x1,0,z1,
+			x1,worldHeight,z1,x0,worldHeight,z0);
+}
+
 static GLuint AdvancedPatchTexture(int lump,bool transparentPatch,
 	int *outWidth,int *outHeight)
 {
@@ -674,8 +692,8 @@ static GLuint AdvancedPatchTexture(int lump,bool transparentPatch,
 	return advancedPatchTextures[slot].texture;
 }
 
-static void AdvancedPatchFace(int lump,bool transparentPatch,
-	float x0,float z0,float x1,float z1)
+static void AdvancedPatchFaceRange(int lump,bool transparentPatch,
+	float x0,float z0,float x1,float z1,float y0,float y1)
 {
 	GLuint texture=AdvancedPatchTexture(lump,transparentPatch,NULL,NULL);
 	if (!texture) return;
@@ -684,12 +702,18 @@ static void AdvancedPatchFace(int lump,bool transparentPatch,
 	glAlphaFunc(GL_GREATER,0.05f);
 	glBindTexture(GL_TEXTURE_2D,texture);
 	glBegin(GL_QUADS);
-	glTexCoord2f(0,1); glVertex3f(x0,0,z0);
-	glTexCoord2f(1,1); glVertex3f(x1,0,z1);
-	glTexCoord2f(1,0); glVertex3f(x1,1,z1);
-	glTexCoord2f(0,0); glVertex3f(x0,1,z0);
+	glTexCoord2f(0,1); glVertex3f(x0,y0,z0);
+	glTexCoord2f(1,1); glVertex3f(x1,y0,z1);
+	glTexCoord2f(1,0); glVertex3f(x1,y1,z1);
+	glTexCoord2f(0,0); glVertex3f(x0,y1,z0);
 	glEnd();
 	glDisable(GL_ALPHA_TEST);
+}
+
+static void AdvancedPatchFace(int lump,bool transparentPatch,
+	float x0,float z0,float x1,float z1)
+{
+	AdvancedPatchFaceRange(lump,transparentPatch,x0,z0,x1,z1,0,1);
 }
 
 static void AdvancedApplyLight(float level,int lightingEnabled,
@@ -856,7 +880,8 @@ bool AdvancedRendererActive(void)
 
 void AdvancedRendererDrawWorld(const word *tiles,const byte *specialOrientation,
 	const word *specialTexture,
-	const signed short *specialPatches,
+	const signed short *specialPatches,const word *wallTextures,
+	const signed short *wallAltTextures,
 	int mapsize,int worldHeight,float playerx,float playery,float cameraHeight,
 	float yaw,float pitch,
 	const byte *floorPixels,const byte *ceilingPixels,
@@ -1061,26 +1086,41 @@ void AdvancedRendererDrawWorld(const word *tiles,const byte *specialOrientation,
 						AdvancedPatchFace(specialTexture[cell],false,x0,z0-.5f,x1,z0-.5f);
 				}
 			}
-	/* Masked gates use a transparent lower patch in the original renderer.
-	   At the common one-level wall height, that is the complete visible gate. */
+	/* Masked walls are vertically composed: a transparent bottom layer,
+	   optional repeated middle layers, and a top layer. */
 	if (specialOrientation && specialPatches)
 		for (x=minx;x<=maxx;x++)
 			for (y=miny;y<=maxy;y++)
 			{
 				int cell=x*mapsize+y;
-				int lump=specialPatches[cell*3];
-				bool transparentPatch=true;
-				if (lump<0) { lump=specialPatches[cell*3+1]; transparentPatch=false; }
-				if (lump<0) { lump=specialPatches[cell*3+2]; transparentPatch=false; }
-				if ((tiles[cell]&0xc000)==0xc000 && specialOrientation[cell] && lump>=0)
+				int bottom=specialPatches[cell*3];
+				int middle=specialPatches[cell*3+1];
+				int topPatch=specialPatches[cell*3+2];
+				if ((tiles[cell]&0xc000)==0xc000 && specialOrientation[cell] &&
+					(bottom>=0 || middle>=0 || topPatch>=0))
 				{
 					float x0=(float)x,x1=x0+1.0f,z0=(float)-y,z1=z0-1.0f;
+					float ax0,az0,ax1,az1;
+					int layer;
 					AdvancedSetTileLight(lightLevels,mapsize,x,y,
 						lightingEnabled,darkAmbient,coloredLights);
 					if (specialOrientation[cell]==1)
-						AdvancedPatchFace(lump,transparentPatch,x0+.5f,z0,x0+.5f,z1);
+					{
+						ax0=ax1=x0+.5f; az0=z0; az1=z1;
+					}
 					else
-						AdvancedPatchFace(lump,transparentPatch,x0,z0-.5f,x1,z0-.5f);
+					{
+						ax0=x0; ax1=x1; az0=az1=z0-.5f;
+					}
+					if (bottom>=0)
+						AdvancedPatchFaceRange(bottom,true,ax0,az0,ax1,az1,0,1);
+					for (layer=1;layer<worldHeight-1;layer++)
+						if (middle>=0)
+							AdvancedPatchFaceRange(middle,false,ax0,az0,ax1,az1,
+								(float)layer,(float)layer+1.0f);
+					if (worldHeight>1 && topPatch>=0)
+						AdvancedPatchFaceRange(topPatch,false,ax0,az0,ax1,az1,
+							(float)worldHeight-1.0f,(float)worldHeight);
 				}
 			}
 	/* Sprites remain classic camera-facing artwork, now placed in the true
@@ -1099,20 +1139,32 @@ void AdvancedRendererDrawWorld(const word *tiles,const byte *specialOrientation,
 			{
 				float x0=(float)x,x1=x0+1.0f;
 				float z0=(float)-y,z1=z0-1.0f;
-				word wall=tiles[(x-1)*mapsize+y];
+				int wallCell=(x-1)*mapsize+y;
+				word wall=tiles[wallCell];
 				AdvancedSetTileLight(lightLevels,mapsize,x,y,
 					lightingEnabled,darkAmbient,coloredLights);
 				if (wall && !(wall&0x8000))
-					AdvancedWallFace(wall,x0,0,z1,x0,0,z0,x0,(float)worldHeight,z0,x0,(float)worldHeight,z1);
-				wall=tiles[(x+1)*mapsize+y];
+					AdvancedMappedWallFace(wallTextures ? wallTextures[wallCell] : wall,
+						wallAltTextures ? wallAltTextures[wallCell] : -2,
+						(float)worldHeight,x0,z1,x0,z0);
+				wallCell=(x+1)*mapsize+y;
+				wall=tiles[wallCell];
 				if (wall && !(wall&0x8000))
-					AdvancedWallFace(wall,x1,0,z0,x1,0,z1,x1,(float)worldHeight,z1,x1,(float)worldHeight,z0);
-				wall=tiles[x*mapsize+y-1];
+					AdvancedMappedWallFace(wallTextures ? wallTextures[wallCell] : wall,
+						wallAltTextures ? wallAltTextures[wallCell] : -2,
+						(float)worldHeight,x1,z0,x1,z1);
+				wallCell=x*mapsize+y-1;
+				wall=tiles[wallCell];
 				if (wall && !(wall&0x8000))
-					AdvancedWallFace(wall,x0,0,z0,x1,0,z0,x1,(float)worldHeight,z0,x0,(float)worldHeight,z0);
-				wall=tiles[x*mapsize+y+1];
+					AdvancedMappedWallFace(wallTextures ? wallTextures[wallCell] : wall,
+						wallAltTextures ? wallAltTextures[wallCell] : -2,
+						(float)worldHeight,x0,z0,x1,z0);
+				wallCell=x*mapsize+y+1;
+				wall=tiles[wallCell];
 				if (wall && !(wall&0x8000))
-					AdvancedWallFace(wall,x1,0,z1,x0,0,z1,x0,(float)worldHeight,z1,x1,(float)worldHeight,z1);
+					AdvancedMappedWallFace(wallTextures ? wallTextures[wallCell] : wall,
+						wallAltTextures ? wallAltTextures[wallCell] : -2,
+						(float)worldHeight,x1,z1,x0,z1);
 			}
 	/* First-person artwork is screen-space UI and must be the final world
 	   layer so depth-tested walls and sprites can never overwrite it. */

@@ -222,7 +222,8 @@ byte *AdvancedRendererGetTransPatchPixels(int lump)
 
 extern void AdvancedRendererDrawWorld(const word *tiles,
    const byte *specialOrientation,const word *specialTexture,
-   const signed short *specialPatches,
+   const signed short *specialPatches,const word *wallTextures,
+   const signed short *wallAltTextures,
    int mapsize,int worldHeight,float playerx,float playery,float cameraHeight,
    float yaw,float pitch,const byte *floorPixels,const byte *ceilingPixels,
    const byte *skyPixels,int skyRevision,int spriteCount,
@@ -3043,6 +3044,8 @@ void      ThreeDRefresh (void)
       static byte specialOrientation[MAPSIZE*MAPSIZE];
       static word specialTexture[MAPSIZE*MAPSIZE];
       static signed short specialPatches[MAPSIZE*MAPSIZE*3];
+      static word gpuWallTexture[MAPSIZE*MAPSIZE];
+      static signed short gpuWallAlt[MAPSIZE*MAPSIZE];
       static float gpuSpriteX[MAXVISIBLE],gpuSpriteY[MAXVISIBLE];
       static float gpuSpriteZ[MAXVISIBLE];
       static int gpuSpriteLump[MAXVISIBLE];
@@ -3082,11 +3085,18 @@ void      ThreeDRefresh (void)
       memset(specialOrientation,0,sizeof(specialOrientation));
       memset(specialTexture,0,sizeof(specialTexture));
       for (x=0;x<MAPSIZE*MAPSIZE*3;x++) specialPatches[x]=-1;
+      for (x=0;x<MAPSIZE*MAPSIZE;x++) gpuWallAlt[x]=-2;
       for (x=0;x<MAPSIZE;x++)
          for (y=0;y<MAPSIZE;y++)
             {
             word tile=tilemap[x][y];
             int index=tile&0x3ff;
+            int cell=x*MAPSIZE+y;
+            gpuWallTexture[cell]=(tile&0x1000) ?
+               animwalls[index].texture : index;
+            if (tile&0x2000)
+               gpuWallAlt[cell]=IsWindow(x,y) ? -1 :
+                  (signed short)(MAPSPOT(x,y,2)+1);
             if (M_ISDOOR(x,y) && (index<MAXDOORS) && doorobjlist[index])
                {
                specialOrientation[x*MAPSIZE+y]=doorobjlist[index]->vertical ? 1 : 2;
@@ -3135,7 +3145,8 @@ void      ThreeDRefresh (void)
       if (SHOW_PLAYER_STATS())
          DrawStats();
       AdvancedRendererDrawWorld(&tilemap[0][0],specialOrientation,
-         specialTexture,specialPatches,MAPSIZE,levelheight,
+         specialTexture,specialPatches,gpuWallTexture,gpuWallAlt,
+         MAPSIZE,levelheight,
          (float)player->x/(float)TILEGLOBAL,
          (float)player->y/(float)TILEGLOBAL,gpuCameraHeight,
          yaw,pitch,
