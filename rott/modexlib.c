@@ -457,6 +457,7 @@ typedef struct
 	int lump;
 	GLuint texture;
 	int width,height;
+	int origsize,leftoffset,topoffset;
 } advanced_patch_texture_t;
 static advanced_patch_texture_t advancedPatchTextures[512];
 extern unsigned int lastInteraction;
@@ -609,7 +610,8 @@ static void AdvancedMappedWallFace(int lump,int altLump,float worldHeight,
 }
 
 static GLuint AdvancedPatchTexture(int lump,bool transparentPatch,
-	int *outWidth,int *outHeight)
+	int *outWidth,int *outHeight,int *outOrigSize,
+	int *outLeftOffset,int *outTopOffset)
 {
 	byte *shape,*column;
 	patch_t *patch;
@@ -625,6 +627,9 @@ static GLuint AdvancedPatchTexture(int lump,bool transparentPatch,
 			{
 			if (outWidth) *outWidth=advancedPatchTextures[slot].width;
 			if (outHeight) *outHeight=advancedPatchTextures[slot].height;
+			if (outOrigSize) *outOrigSize=advancedPatchTextures[slot].origsize;
+			if (outLeftOffset) *outLeftOffset=advancedPatchTextures[slot].leftoffset;
+			if (outTopOffset) *outTopOffset=advancedPatchTextures[slot].topoffset;
 			return advancedPatchTextures[slot].texture;
 			}
 	for (slot=0;slot<512;slot++)
@@ -678,6 +683,19 @@ static GLuint AdvancedPatchTexture(int lump,bool transparentPatch,
 	advancedPatchTextures[slot].lump=cacheKey;
 	advancedPatchTextures[slot].width=width;
 	advancedPatchTextures[slot].height=height;
+	if (transparentPatch)
+	{
+		transpatch_t *trans=(transpatch_t *)shape;
+		advancedPatchTextures[slot].origsize=trans->origsize;
+		advancedPatchTextures[slot].leftoffset=trans->leftoffset;
+		advancedPatchTextures[slot].topoffset=trans->topoffset;
+	}
+	else
+	{
+		advancedPatchTextures[slot].origsize=patch->origsize;
+		advancedPatchTextures[slot].leftoffset=patch->leftoffset;
+		advancedPatchTextures[slot].topoffset=patch->topoffset;
+	}
 	glGenTextures(1,&advancedPatchTextures[slot].texture);
 	glBindTexture(GL_TEXTURE_2D,advancedPatchTextures[slot].texture);
 	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_NEAREST);
@@ -689,13 +707,17 @@ static GLuint AdvancedPatchTexture(int lump,bool transparentPatch,
 	free(rgba);
 	if (outWidth) *outWidth=width;
 	if (outHeight) *outHeight=height;
+	if (outOrigSize) *outOrigSize=advancedPatchTextures[slot].origsize;
+	if (outLeftOffset) *outLeftOffset=advancedPatchTextures[slot].leftoffset;
+	if (outTopOffset) *outTopOffset=advancedPatchTextures[slot].topoffset;
 	return advancedPatchTextures[slot].texture;
 }
 
 static void AdvancedPatchFaceRange(int lump,bool transparentPatch,
 	float x0,float z0,float x1,float z1,float y0,float y1)
 {
-	GLuint texture=AdvancedPatchTexture(lump,transparentPatch,NULL,NULL);
+	GLuint texture=AdvancedPatchTexture(lump,transparentPatch,NULL,NULL,
+		NULL,NULL,NULL);
 	if (!texture) return;
 	glEnable(GL_TEXTURE_2D);
 	glEnable(GL_ALPHA_TEST);
@@ -767,23 +789,36 @@ static void AdvancedSetCornerLight(const byte *lightLevels,int mapsize,
 
 static void AdvancedBillboard(int lump,float x,float y,float z,float yaw)
 {
-	int width,height;
-	GLuint texture=AdvancedPatchTexture(lump,false,&width,&height);
+	int width,height,origsize,leftoffset,topoffset,sizeShift;
+	GLuint texture=AdvancedPatchTexture(lump,false,&width,&height,
+		&origsize,&leftoffset,&topoffset);
 	float radians=yaw*(float)(3.14159265358979323846/180.0);
-	float halfWidth=(float)width/128.0f;
-	float spriteHeight=(float)height/64.0f;
-	float rightX=(float)sin(radians)*halfWidth;
-	float rightZ=(float)-cos(radians)*halfWidth;
+	float pixelScale,leftEdge,rightEdge,bottom,top;
+	float rightX=(float)sin(radians);
+	float rightZ=(float)-cos(radians);
 	if (!texture) return;
+	/* The classic scaler treats 128/256-pixel patches as higher-resolution
+	   artwork, not physically larger actors.  It also anchors sprites using
+	   their original canvas and grab offsets instead of centering the cropped
+	   patch rectangle. */
+	sizeShift=origsize>>7;
+	if (sizeShift<0) sizeShift=0;
+	if (sizeShift>4) sizeShift=4;
+	pixelScale=1.0f/(64.0f*(float)(1<<sizeShift));
+	if (origsize<=0) origsize=64<<sizeShift;
+	leftEdge=-(float)(origsize/2+leftoffset)*pixelScale;
+	rightEdge=leftEdge+(float)width*pixelScale;
+	bottom=z+(float)(topoffset-height)*pixelScale;
+	top=z+(float)topoffset*pixelScale;
 	glEnable(GL_TEXTURE_2D);
 	glEnable(GL_ALPHA_TEST);
 	glAlphaFunc(GL_GREATER,0.05f);
 	glBindTexture(GL_TEXTURE_2D,texture);
 	glBegin(GL_QUADS);
-	glTexCoord2f(0,1); glVertex3f(x-rightX,z,y-rightZ);
-	glTexCoord2f(1,1); glVertex3f(x+rightX,z,y+rightZ);
-	glTexCoord2f(1,0); glVertex3f(x+rightX,z+spriteHeight,y+rightZ);
-	glTexCoord2f(0,0); glVertex3f(x-rightX,z+spriteHeight,y-rightZ);
+	glTexCoord2f(0,1); glVertex3f(x+rightX*leftEdge,bottom,y+rightZ*leftEdge);
+	glTexCoord2f(1,1); glVertex3f(x+rightX*rightEdge,bottom,y+rightZ*rightEdge);
+	glTexCoord2f(1,0); glVertex3f(x+rightX*rightEdge,top,y+rightZ*rightEdge);
+	glTexCoord2f(0,0); glVertex3f(x+rightX*leftEdge,top,y+rightZ*leftEdge);
 	glEnd();
 	glDisable(GL_ALPHA_TEST);
 }
@@ -792,7 +827,8 @@ static void AdvancedScreenPatch(int lump,float centerX,int yOffset,
 	int drawableWidth,int drawableHeight)
 {
 	int width,height;
-	GLuint texture=AdvancedPatchTexture(lump,false,&width,&height);
+	GLuint texture=AdvancedPatchTexture(lump,false,&width,&height,
+		NULL,NULL,NULL);
 	float aspect=(float)drawableWidth/(float)drawableHeight;
 	float h=(float)height/200.0f;
 	float w=((float)width/200.0f)/aspect;
@@ -917,6 +953,10 @@ void AdvancedRendererDrawWorld(const word *tiles,const byte *specialOrientation,
 	glMatrixMode(GL_PROJECTION);
 	glLoadIdentity();
 	glFrustum(-right,right,-top,top,0.05,96.0);
+	/* The ROTT grid uses a screen-space handedness opposite OpenGL's default
+	   camera basis.  Mirror camera X once here so map geometry and attached
+	   artwork retain their original left/right layout. */
+	glScalef(-1.0f,1.0f,1.0f);
 	glMatrixMode(GL_MODELVIEW);
 	glLoadIdentity();
 	/* ROTT's stored pitch has the opposite sign from the model-view rotation. */

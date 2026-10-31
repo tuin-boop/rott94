@@ -1916,10 +1916,8 @@ void PollKeyboardButtons (void)
    {
       if (Keystate[sc_W]) buttonpoll[di_north] = true;
       if (Keystate[sc_S]) buttonpoll[di_south] = true;
-      /* ROTT's historical strafe command names are reversed relative to the
-         perspective renderer's handedness. */
-      if (Keystate[sc_A]) buttonpoll[bt_straferight] = true;
-      if (Keystate[sc_D]) buttonpoll[bt_strafeleft] = true;
+      if (Keystate[sc_A]) buttonpoll[bt_strafeleft] = true;
+      if (Keystate[sc_D]) buttonpoll[bt_straferight] = true;
    }
 }
 
@@ -2333,10 +2331,7 @@ void PollMouseMove (void)
    {
 	  if (usemouselook == true)
 		 {
-		 if (AdvancedRendererActive())
-			MX = mousexmove*mouselookScale;
-		 else
-			MX = -mousexmove*mouselookScale;
+		 MX = -mousexmove*mouselookScale;
 		 }
 	  else
 		 {
