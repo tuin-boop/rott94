@@ -755,7 +755,6 @@ static void AdvancedBillboard(int lump,float x,float y,float z,float yaw)
 	glEnable(GL_ALPHA_TEST);
 	glAlphaFunc(GL_GREATER,0.05f);
 	glBindTexture(GL_TEXTURE_2D,texture);
-	glColor3f(1,1,1);
 	glBegin(GL_QUADS);
 	glTexCoord2f(0,1); glVertex3f(x-rightX,z,y-rightZ);
 	glTexCoord2f(1,1); glVertex3f(x+rightX,z,y+rightZ);
@@ -1088,8 +1087,12 @@ void AdvancedRendererDrawWorld(const word *tiles,const byte *specialOrientation,
 	   perspective/depth buffer instead of the old column scaler. */
 	if (spriteX && spriteY && spriteZ && spriteLump)
 		for (x=0;x<spriteCount;x++)
+		{
+			AdvancedSetTileLight(lightLevels,mapsize,(int)spriteX[x],
+				(int)spriteY[x],lightingEnabled,darkAmbient,coloredLights);
 			AdvancedBillboard(spriteLump[x],spriteX[x],-spriteY[x],
 				spriteZ[x],yaw);
+		}
 	for (x=minx;x<=maxx;x++)
 		for (y=miny;y<=maxy;y++)
 			if (tiles[x*mapsize+y]==0)
