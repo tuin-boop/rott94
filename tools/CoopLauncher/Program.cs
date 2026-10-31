@@ -46,7 +46,7 @@ namespace Rott94CoopLauncher
             localAddress = FindLanAddress();
 
             Text = "ROTT94 Co-op Launcher";
-            ClientSize = new Size(520, 390);
+            ClientSize = new Size(520, 432);
             FormBorderStyle = FormBorderStyle.FixedSingle;
             MaximizeBox = false;
             StartPosition = FormStartPosition.CenterScreen;
@@ -93,16 +93,26 @@ namespace Rott94CoopLauncher
             joinCard.Controls.Add(join);
             Controls.Add(joinCard);
 
-            windowed = MakeCheckBox("Windowed", 24, 307, true);
-            skipIntro = MakeCheckBox("Skip intro", 130, 307, true);
+            Button singlePlayer = MakeButton("SINGLE PLAYER", 20, 304, 145, 40, Gold, Background);
+            singlePlayer.Click += delegate { LaunchSinglePlayer(); };
+            Controls.Add(singlePlayer);
+
+            windowed = MakeCheckBox("Windowed", 184, 312, true);
+            skipIntro = MakeCheckBox("Skip intro", 290, 312, true);
             Controls.Add(windowed);
             Controls.Add(skipIntro);
-            Controls.Add(MakeLabel("2 players  •  UDP 34858  •  Same build on both PCs", 244, 307, 255, 22,
+            Controls.Add(MakeLabel("Co-op: 2 players  •  UDP 34858  •  matching builds", 24, 351, 472, 22,
                 Color.FromArgb(155, 145, 125), 8.5F, FontStyle.Regular));
 
             status = MakeLabel("Ready. Allow the game through Windows Firewall on Private networks.",
-                24, 346, 472, 25, Cream, 8.8F, FontStyle.Regular);
+                24, 389, 472, 25, Cream, 8.8F, FontStyle.Regular);
             Controls.Add(status);
+        }
+
+        private void LaunchSinglePlayer()
+        {
+            if (LaunchGame(CommonArguments().Trim()))
+                SetStatus("Single-player started.");
         }
 
         private void LaunchHost()
@@ -129,7 +139,10 @@ namespace Rott94CoopLauncher
 
         private string CommonArguments()
         {
-            string args = windowed.Checked ? " -window" : "";
+            // Always override config.rot: merely omitting -window leaves the last
+            // saved FullScreen value in control, which makes this checkbox appear
+            // to do nothing after a windowed run.
+            string args = windowed.Checked ? " -window" : " -fullscreen";
             if (skipIntro.Checked) args += " -nowait";
             return args;
         }

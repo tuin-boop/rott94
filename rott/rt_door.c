@@ -3895,7 +3895,10 @@ void WallMoving (int pwall)
 				pw->soundhandle=SD_PlaySoundRTP ( SD_TURBOWALLSND, pw->x, pw->y );
 			}
 
-		if (actorat[pw->tilex][pw->tilex])
+		/* Check the wall's actual destination tile.  The old tilex/tilex
+		 * lookup inspected an unrelated diagonal square whenever x != y,
+		 * making moving-wall cleanup depend on actors elsewhere in the map. */
+		if (actorat[pw->tilex][pw->tiley])
 		  ResolveDoorSpace(pw->tilex,pw->tiley);
 		mapseen[checkx][checky] = 0;
 		pw->areanumber = MAPSPOT (pw->tilex, pw->tiley, 0)-AREATILE;

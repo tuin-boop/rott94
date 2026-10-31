@@ -61,6 +61,11 @@ game process starts and exit codes in `launcher-session.log`, and configures
 Windows to place full crash dumps in `diagnostics\crash-dumps`. If a LAN test
 crashes, preserve that folder from the affected computer for diagnosis.
 
+For the original single-player game, click **SINGLE PLAYER** in the same
+launcher. This also imports the registered data when needed, but starts the game
+without networking. Starting the bare game executable only works after an
+`assets` folder has already been imported.
+
 ## Co-op controls
 
 - `F12` on the host rallies the other player to the nearest safe empty tile
