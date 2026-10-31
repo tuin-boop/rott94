@@ -230,7 +230,9 @@ extern void AdvancedRendererDrawWorld(const word *tiles,
    const float *spriteX,const float *spriteY,const float *spriteZ,
    const int *spriteLump,int weaponMain,int weaponAlt,
    int weaponXOffset,int weaponYOffset,const byte *lightLevels,
-   int lightingEnabled,int darkAmbient,int coloredLights);
+   int lightingEnabled,int darkAmbient,int coloredLights,int movingWallCount,
+   const float *movingWallX,const float *movingWallY,
+   const int *movingWallTexture);
 
 static void AdvancedRendererWeapon(int *mainLump,int *altLump,
    int *xOffset,int *yOffset)
@@ -3049,7 +3051,10 @@ void      ThreeDRefresh (void)
       static float gpuSpriteX[MAXVISIBLE],gpuSpriteY[MAXVISIBLE];
       static float gpuSpriteZ[MAXVISIBLE];
       static int gpuSpriteLump[MAXVISIBLE];
+      static float gpuMovingWallX[MAXPWALLS],gpuMovingWallY[MAXPWALLS];
+      static int gpuMovingWallTexture[MAXPWALLS];
       int gpuSpriteCount=0;
+      int gpuMovingWallCount=0;
       int gpuWeaponMain,gpuWeaponAlt,gpuWeaponX,gpuWeaponY;
       statobj_t *gpuStat;
       objtype *gpuActor;
@@ -3139,6 +3144,18 @@ void      ThreeDRefresh (void)
             gpuSpriteZ[gpuSpriteCount]=(float)(nominalheight-gpuActor->z)/64.0f;
             gpuSpriteLump[gpuSpriteCount++]=lump;
             }
+      for (x=0;x<pwallnum && gpuMovingWallCount<MAXPWALLS;x++)
+         if (pwallobjlist[x] &&
+             (pwallobjlist[x]->action==pw_pushing ||
+              pwallobjlist[x]->action==pw_moving))
+            {
+            gpuMovingWallX[gpuMovingWallCount]=
+               (float)pwallobjlist[x]->x/(float)TILEGLOBAL;
+            gpuMovingWallY[gpuMovingWallCount]=
+               (float)pwallobjlist[x]->y/(float)TILEGLOBAL;
+            gpuMovingWallTexture[gpuMovingWallCount++]=
+               pwallobjlist[x]->texture;
+            }
       AdvancedRendererWeapon(&gpuWeaponMain,&gpuWeaponAlt,
          &gpuWeaponX,&gpuWeaponY);
       AdvancedRendererPrepareHud();
@@ -3155,7 +3172,8 @@ void      ThreeDRefresh (void)
          gpuSpriteCount,gpuSpriteX,gpuSpriteY,gpuSpriteZ,gpuSpriteLump,
          gpuWeaponMain,gpuWeaponAlt,gpuWeaponX,gpuWeaponY,
          &dynamicTorchLight[0][0],advancedlighting,advanceddarkambient,
-         advancedcoloredlights);
+         advancedcoloredlights,gpuMovingWallCount,gpuMovingWallX,
+         gpuMovingWallY,gpuMovingWallTexture);
       XFlipPage();
       gamestate.frame++;
       player=tempptr;

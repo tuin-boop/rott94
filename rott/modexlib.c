@@ -889,7 +889,9 @@ void AdvancedRendererDrawWorld(const word *tiles,const byte *specialOrientation,
 	const float *spriteX,const float *spriteY,const float *spriteZ,
 	const int *spriteLump,int weaponMain,int weaponAlt,
 	int weaponXOffset,int weaponYOffset,const byte *lightLevels,
-	int lightingEnabled,int darkAmbient,int coloredLights)
+	int lightingEnabled,int darkAmbient,int coloredLights,int movingWallCount,
+	const float *movingWallX,const float *movingWallY,
+	const int *movingWallTexture)
 {
 	int drawableWidth,drawableHeight;
 	int minx,maxx,miny,maxy,x,y;
@@ -954,12 +956,17 @@ void AdvancedRendererDrawWorld(const word *tiles,const byte *specialOrientation,
 		/* Stable dark caps are preferable to stretching a panorama into a
 		   singularity when the player looks completely vertical. */
 		glDisable(GL_TEXTURE_2D);
-		glColor3f(.025f,.02f,.035f);
+		/* The cylindrical source has no zenith pixels.  Blend its upper edge
+		   into a muted cloud colour instead of exposing a black circular cap
+		   during near-vertical free look. */
+		glShadeModel(GL_SMOOTH);
 		glBegin(GL_TRIANGLE_FAN);
+		glColor3f(.12f,.13f,.18f);
 		glVertex3f(0,hi,0);
 		for (slice=0;slice<=slices;slice++)
 		{
 			double lon=6.28318530717958647692*(double)slice/(double)slices;
+			glColor3f(.31f,.32f,.36f);
 			glVertex3f((float)cos(lon)*radius,hi,(float)sin(lon)*radius);
 		}
 		glEnd();
@@ -1166,6 +1173,24 @@ void AdvancedRendererDrawWorld(const word *tiles,const byte *specialOrientation,
 						wallAltTextures ? wallAltTextures[wallCell] : -2,
 						(float)worldHeight,x1,z1,x0,z1);
 			}
+	/* Pushwalls move continuously between grid cells, so tilemap alone cannot
+	   describe their visible position while in motion. */
+	if (movingWallX && movingWallY && movingWallTexture)
+		for (x=0;x<movingWallCount;x++)
+		{
+			float x0=movingWallX[x]-.5f,x1=movingWallX[x]+.5f;
+			float z0=-movingWallY[x]+.5f,z1=-movingWallY[x]-.5f;
+			AdvancedSetTileLight(lightLevels,mapsize,(int)movingWallX[x],
+				(int)movingWallY[x],lightingEnabled,darkAmbient,coloredLights);
+			AdvancedMappedWallFace(movingWallTexture[x],-2,(float)worldHeight,
+				x0,z1,x0,z0);
+			AdvancedMappedWallFace(movingWallTexture[x],-2,(float)worldHeight,
+				x1,z0,x1,z1);
+			AdvancedMappedWallFace(movingWallTexture[x],-2,(float)worldHeight,
+				x0,z0,x1,z0);
+			AdvancedMappedWallFace(movingWallTexture[x],-2,(float)worldHeight,
+				x1,z1,x0,z1);
+		}
 	/* First-person artwork is screen-space UI and must be the final world
 	   layer so depth-tested walls and sprites can never overwrite it. */
 	if (weaponMain>=0)
