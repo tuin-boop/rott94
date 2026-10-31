@@ -76,7 +76,7 @@ typedef enum
 
 extern byte * playermaps[MAXPLAYERCOLORS];
 //extern short  pixelangle[MAXVIEWWIDTH];
-extern short  pixelangle[800];
+extern short  pixelangle[ROTT_MAX_RENDER_WIDTH];
 extern byte   gammatable[GAMMAENTRIES];
 extern int    gammaindex;
 extern byte   uniformcolors[MAXPLAYERCOLORS];
@@ -92,7 +92,7 @@ extern  int baseminshade;
 extern  int basemaxshade;
 extern  int    viewheight;
 extern  int    viewwidth;
-extern  longword heightnumerator;
+extern  unsigned long long heightnumerator;
 extern  fixed  scale;
 extern  int    screenofs;
 extern  int    centerx;
@@ -100,6 +100,7 @@ extern  int centery;
 extern  int centeryfrac;
 extern  int fulllight;
 extern  byte * colormap;
+extern  byte * warmmap;
 extern  byte * greenmap;
 extern  byte * redmap;
 extern  int weaponscale;

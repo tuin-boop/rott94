@@ -36,6 +36,7 @@ namespace Rott94CoopLauncher
         private readonly TextBox joinAddress;
         private readonly CheckBox windowed;
         private readonly CheckBox skipIntro;
+        private readonly CheckBox gamepad;
         private readonly Label status;
         private readonly string localAddress;
         private readonly List<Process> launchedProcesses = new List<Process>();
@@ -99,8 +100,10 @@ namespace Rott94CoopLauncher
 
             windowed = MakeCheckBox("Windowed", 184, 312, true);
             skipIntro = MakeCheckBox("Skip intro", 290, 312, true);
+            gamepad = MakeCheckBox("Gamepad", 396, 312, false);
             Controls.Add(windowed);
             Controls.Add(skipIntro);
+            Controls.Add(gamepad);
             Controls.Add(MakeLabel("Co-op: 2 players  •  UDP 34858  •  matching builds", 24, 351, 472, 22,
                 Color.FromArgb(155, 145, 125), 8.5F, FontStyle.Regular));
 
@@ -143,7 +146,10 @@ namespace Rott94CoopLauncher
             // saved FullScreen value in control, which makes this checkbox appear
             // to do nothing after a windowed run.
             string args = windowed.Checked ? " -window" : " -fullscreen";
+            Rectangle desktop = Screen.PrimaryScreen.Bounds;
+            args += " -resolution " + desktop.Width + "x" + desktop.Height;
             if (skipIntro.Checked) args += " -nowait";
+            if (gamepad.Checked) args += " -joys";
             return args;
         }
 

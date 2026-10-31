@@ -43,6 +43,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "rt_vid.h"
 #include "rt_view.h"
 #include "rt_playr.h"
+#include "rt_cfg.h"
 //MED
 #include "memcheck.h"
 
@@ -81,6 +82,9 @@ void SetPlayerLightLevel (void)
    int lv;
    int intercept;
    int height;
+   int dynamiclv;
+   int ambient;
+   byte *map;
 
    whereami=23;
 	if (MISCVARS->GASON==1)
@@ -106,19 +110,23 @@ void SetPlayerLightLevel (void)
 	else
       intercept=(player->y>>11)&0x1c;
 
+   dynamiclv=GetDynamicTorchLight(player->x>>16,player->y>>16);
+   ambient=(advancedlighting && advanceddarkambient) ? 7 : 0;
+   /* Preserve the weapon artwork's palette.  A full warm remap turns skin and
+    * metal into a blown-out orange silhouette; weapon color response will get
+    * its own directional probe in the advanced renderer later. */
+   map=colormap;
+   lv=dynamiclv>>1;
    if (lightsource)
       {
-      lv=(((LightSourceAt(player->x>>16,player->y>>16)>>intercept)&0xf)>>1);
-      i=maxshade-(height>>normalshade)-lv;
-      if (i<minshade) i=minshade;
-      shadingtable=colormap+(i<<8);
+      lv+=(((LightSourceAt(player->x>>16,player->y>>16)>>intercept)&0xf)>>1);
       }
-   else
-      {
-      i=maxshade-(height>>normalshade);
-      if (i<minshade) i=minshade;
-      shadingtable=colormap+(i<<8);
-      }
+   i=maxshade-(height>>normalshade);
+   if (i<minshade) i=minshade;
+   i+=ambient-lv;
+   if (i>31) i=31;
+   if (i<minshade) i=minshade;
+   shadingtable=map+(i<<8);
 }
 
 

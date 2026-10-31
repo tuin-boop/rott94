@@ -37,6 +37,10 @@ void SetPlaneViewSize( void );
 void MakeSkyTile (byte * tile);
 void DrawFullSky( void );
 bool SkyExists (void);
+const byte *AdvancedRendererFloorPixels(void);
+const byte *AdvancedRendererCeilingPixels(void);
+const byte *AdvancedRendererSkyPixels(void);
+int AdvancedRendererSkyRevision(void);
 
 #endif
 

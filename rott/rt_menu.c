@@ -740,11 +740,12 @@ CP_MenuNames ControlMMenuNames[] =
    "CONTROLS",
    "USER OPTIONS",
    "EXT USER OPTIONS",//bna added
+   "ADVANCED OPTIONS",
    "MUSIC VOLUME",
    "SOUND FX VOLUME"
 
    };
-CP_iteminfo ControlMItems = {32, 48-8, 5, 0, 32, ControlMMenuNames, mn_largefont };//bna added
+CP_iteminfo ControlMItems = {32, 48-14, 6, 0, 32, ControlMMenuNames, mn_largefont };//bna added
 //CP_iteminfo ControlMItems = {32, 48, 4, 0, 32, ControlMMenuNames, mn_largefont };
 
 CP_itemtype ControlMMenu[] =
@@ -752,6 +753,7 @@ CP_itemtype ControlMMenu[] =
    {2, "cntl\0",     'C', (menuptr)CP_Control},
    {1, "uopt\0",     'U', (menuptr)CP_OptionsMenu},
    {1, "euopt\0", 'E', (menuptr)CP_ExtOptionsMenu},//bna added
+   {1, "advopt\0", 'A', (menuptr)CP_AdvancedOptionsMenu},
    {1, "muvolumn\0", 'M', (menuptr)MusicVolume},
    {1, "fxvolumn\0", 'S', (menuptr)FXVolume}
 
@@ -787,6 +789,25 @@ CP_itemtype ExtOptionsMenu[] =
    {1, "", 'C', NULL},
    {1, "", 'J', NULL},
    {1, "", 'F', NULL}
+};
+
+/* Compact home for opt-in engine upgrades.  Keep room below these first
+ * renderer switches so later advanced features can grow here cleanly. */
+CP_MenuNames AdvancedOptionsNames[] =
+   {
+   "MASTER LIGHTING",
+   "COLORED LIGHTS",
+   "TORCH FLICKER",
+   "DARK AMBIENT"
+   };
+CP_iteminfo AdvancedOptionsItems = { 20, MENU_Y, 4, 0, 43, AdvancedOptionsNames, mn_largefont };
+
+CP_itemtype AdvancedOptionsMenu[] =
+{
+   {1, "", 'M', NULL},
+   {1, "", 'C', NULL},
+   {1, "", 'T', NULL},
+   {1, "", 'D', NULL}
 };
    
 //bna added end
@@ -5483,6 +5504,62 @@ void DrawExtOptionsButtons (void)
          else
             DrawMenuBufItem (20+22, ExtOptionsItems.y+i*14-1, button_off);
 		}
+}
+
+void DrawAdvancedOptionsButtons (void)
+{
+   int i,on;
+   int button_on=W_GetNumForName("snd_on");
+   int button_off=W_GetNumForName("snd_off");
+
+   for (i=0;i<AdvancedOptionsItems.amount;i++)
+      {
+      on=0;
+      switch (i)
+         {
+         case 0: on=advancedlighting; break;
+         case 1: on=advancedcoloredlights; break;
+         case 2: on=advancedlightflicker; break;
+         case 3: on=advanceddarkambient; break;
+         }
+      DrawMenuBufItem(20+22,AdvancedOptionsItems.y+i*14-1,on ? button_on : button_off);
+      }
+}
+
+void DrawAdvancedOptionsMenu (void)
+{
+   MenuNum=1;
+   SetAlternateMenuBuf();
+   ClearMenuBuf();
+   SetMenuTitle("Advanced Options");
+   MN_GetCursorLocation(&AdvancedOptionsItems,&AdvancedOptionsMenu[0]);
+   DrawMenu(&AdvancedOptionsItems,&AdvancedOptionsMenu[0]);
+   DrawAdvancedOptionsButtons();
+   DisplayInfo(0);
+   FlipMenuBuf();
+}
+
+void CP_AdvancedOptionsMenu (void)
+{
+   int which;
+
+   DrawAdvancedOptionsMenu();
+   do
+      {
+      which=HandleMenu(&AdvancedOptionsItems,&AdvancedOptionsMenu[0],NULL);
+      switch (which)
+         {
+         case 0: advancedlighting^=1; break;
+         case 1: advancedcoloredlights^=1; break;
+         case 2: advancedlightflicker^=1; break;
+         case 3: advanceddarkambient^=1; break;
+         }
+      if (which>=0)
+         DrawAdvancedOptionsButtons();
+      }
+   while (which>=0);
+
+   DrawControlMenu();
 }
 
 //****************************************************************************

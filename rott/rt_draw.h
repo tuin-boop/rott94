@@ -110,6 +110,8 @@ void  FlipPage ( void );
 void  TurnShakeOff( void );
 void  AdaptDetail ( void );
 int   CalcHeight (void);
+int   GetDynamicTorchLight (int tilex, int tiley);
+int   GetSmoothDynamicTorchLight (int worldx, int worldy);
 void  DoLoadGameSequence( void );
 void RotateBuffer (int startangle, int endangle, int startscale, int endscale, int time);
 void ApogeeTitle (void);

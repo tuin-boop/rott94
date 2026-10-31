@@ -72,6 +72,8 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #endif
 
 extern bool usejump;
+extern bool usemouselook;
+extern bool AdvancedRendererActive(void);
 
 
 specials CurrentSpecialsTimes =
@@ -160,6 +162,13 @@ int CY = 0;
 bool vrenabled = false;
 int VX = 0;
 int VY = 0;
+
+/* Modern mouselook pitch is camera state, not simulation head-tilt state.
+   Keeping it separate prevents auto-aim, transformations and old horizon
+   bookkeeping from feeding invalid values back into mouse input. */
+static int modernPitchFrac = 0;
+static objtype *modernPitchPlayer = NULL;
+static int modernPitchMap = -1;
 
 int oldcyberx = 0;
 int oldcybery = 0;
@@ -743,7 +752,10 @@ void UnTargetActor ( objtype * target )
       if (PLAYERSTATE[i].guntarget==target)
          {
          PLAYERSTATE[i].guntarget=NULL;
-         SetNormalHorizon(PLAYER[i]);
+         /* Auto-aim may release its target, but modern mouselook owns the
+            local camera pitch and must not be recentered as a side effect. */
+         if ((!usemouselook) || (i!=consoleplayer))
+            SetNormalHorizon(PLAYER[i]);
          }
       }
 }
@@ -1895,6 +1907,20 @@ void PollKeyboardButtons (void)
          buttonpoll[i] = true;
       }
    }
+
+   /* The original defaults use the cursor keys and turn left/right.  The
+      perspective renderer is intended to behave like a modern first-person
+      game, so always provide a conventional WASD layer there while retaining
+      every user-configured binding above. */
+   if (AdvancedRendererActive())
+   {
+      if (Keystate[sc_W]) buttonpoll[di_north] = true;
+      if (Keystate[sc_S]) buttonpoll[di_south] = true;
+      /* ROTT's historical strafe command names are reversed relative to the
+         perspective renderer's handedness. */
+      if (Keystate[sc_A]) buttonpoll[bt_straferight] = true;
+      if (Keystate[sc_D]) buttonpoll[bt_strafeleft] = true;
+   }
 }
 
 //******************************************************************************
@@ -1902,7 +1928,6 @@ void PollKeyboardButtons (void)
 // PollMouseButtons
 //
 //******************************************************************************
-extern bool usemouselook;
 void PollMouseButtons (void)
    {
    int i;
@@ -1930,6 +1955,7 @@ void PollMouseButtons (void)
 				playertype * pstate;
 				pstate=&PLAYERSTATE[consoleplayer];
 				pstate->horizon = 512;
+				modernPitchFrac = 0;
 				// SetNormalHorizon(PLAYER[0]);
 			}
 			//bna added
@@ -2208,10 +2234,9 @@ extern int inverse_mouse;
 void PollMouseMove (void)
 {
    int  mousexmove, mouseymove;
-   double Ys;
-//SetTextMode();
-
-   Ys=(Y_MouseSpeed/100);
+   int verticalLook;
+   int mouselookScale;
+   static int profileMouse = -1;
 //
 
 // const long inverse_mouse  = 1; //set  to -1 to invert mouse
@@ -2225,12 +2250,43 @@ void PollMouseMove (void)
    mouseymove=MY;
 #endif
 
-   if (abs(mousexmove)>abs(mouseymove))
-      mouseymove/=2;
-   else
-      mousexmove/=2;
+   if (profileMouse < 0)
+      profileMouse = (CheckParm("profilemouse") != 0);
+
+   if (usemouselook)
+      {
+      /* Relative-mode capture/focus can synthesize a screen-sized first
+         motion.  Bound each 35 Hz input sample without adding acceleration. */
+      if (mousexmove>128) mousexmove=128;
+      else if (mousexmove<-128) mousexmove=-128;
+      if (mouseymove>128) mouseymove=128;
+      else if (mouseymove<-128) mouseymove=-128;
+      }
+
+   /* The original port suppresses the lesser mouse axis, which makes modern
+    * free look feel sticky and stair-stepped during diagonal motion. */
+   if (!usemouselook)
+      {
+      if (abs(mousexmove)>abs(mouseymove))
+         mouseymove/=2;
+      else
+         mousexmove/=2;
+      }
    MX = 0;
    MY = 0;
+
+   /* Modern, linear mouse sensitivity in 16.16 fine-angle units.  At the
+      default setting this is about 0.1 degree per raw mouse count. */
+   mouselookScale = 12000 + (mouseadjustment * 4800);
+
+   if (usemouselook &&
+       ((modernPitchPlayer!=PLAYER[consoleplayer]) ||
+        (modernPitchMap!=gamestate.mapon)))
+      {
+      modernPitchPlayer=PLAYER[consoleplayer];
+      modernPitchMap=gamestate.mapon;
+      modernPitchFrac=0;
+      }
 
 
    if ((abs (mouseymove)) >= threshold)
@@ -2238,20 +2294,26 @@ void PollMouseMove (void)
       MY =  MOUSE_TZ_INPUT_SCALE*mouseymove;
 	  MY *= inverse_mouse;
 	  if (usemouselook == true){
-		  if (MY > 0){
-				playertype * pstate;
-				pstate=&PLAYERSTATE[consoleplayer];
-				//if (pstate->horizon > 512){
-					pstate->horizon -= Ys * (2*sensitivity_scalar[mouseadjustment]);
-				//}
-		  }
-		  else if (MY < 0){
-		  		playertype * pstate;
-				pstate=&PLAYERSTATE[consoleplayer];
-				//SetTextMode (  );
-				pstate->horizon += Ys * (2*sensitivity_scalar[mouseadjustment]);
-				//buttonpoll[ bt_horizonup ] = true;
-		  }
+		  playertype *pstate=&PLAYERSTATE[consoleplayer];
+		  int pitchLimit=YZANGLELIMIT<<ANGLEBITS;
+
+		  /* SDL reports positive Y when the mouse moves down.  The classic
+		     column renderer historically stores the opposite sign, while the
+		     perspective renderer consumes a conventional camera pitch. */
+		  if (AdvancedRendererActive())
+			 modernPitchFrac+=mouseymove*inverse_mouse*mouselookScale;
+		  else
+			 modernPitchFrac-=mouseymove*inverse_mouse*mouselookScale;
+		  if (modernPitchFrac>pitchLimit)
+			 modernPitchFrac=pitchLimit;
+		  else if (modernPitchFrac<-pitchLimit)
+			 modernPitchFrac=-pitchLimit;
+		  verticalLook=modernPitchFrac>>ANGLEBITS;
+		  SetPlayerHorizon(pstate,verticalLook);
+		  /* Free look is a camera input, not a head-tilt request.  Apply it now
+		   * instead of making the legacy simulation ease toward it by chunks. */
+		  PLAYER[consoleplayer]->yzangle=pstate->horizon-HORIZONYZOFFSET;
+		  Fix(PLAYER[consoleplayer]->yzangle);
 		  MY = 0;
 	  }else{
 		 // MY += FixedMul(MY,mouseadjustment*MOUSE_TZ_SENSITIVITY_SCALE);
@@ -2269,9 +2331,18 @@ void PollMouseMove (void)
 
    if ((abs (mousexmove)) >= threshold)
    {
-      //MX = -MOUSE_RY_INPUT_SCALE*mousexmove;
-      MX = -mouse_ry_input_scale*mousexmove;
-      MX += FixedMul(MX,sensitivity_scalar[mouseadjustment]*MOUSE_RY_SENSITIVITY_SCALE);
+	  if (usemouselook == true)
+		 {
+		 if (AdvancedRendererActive())
+			MX = mousexmove*mouselookScale;
+		 else
+			MX = -mousexmove*mouselookScale;
+		 }
+	  else
+		 {
+		 MX = -mouse_ry_input_scale*mousexmove;
+		 MX += FixedMul(MX,sensitivity_scalar[mouseadjustment]*MOUSE_RY_SENSITIVITY_SCALE);
+		 }
    //   if (abs(MX) > MAXMOUSETURN)
      //   MX = MAXMOUSETURN*SGN(MX);
 	  if (usemouselook == true){
@@ -2287,6 +2358,24 @@ void PollMouseMove (void)
 
 //   MX=0;
 //   MY=0;
+
+   /* Reassert the independent pitch even on polls with no vertical motion. */
+   if (usemouselook && PLAYER[consoleplayer])
+      {
+      verticalLook=modernPitchFrac>>ANGLEBITS;
+      SetPlayerHorizon(&PLAYERSTATE[consoleplayer],verticalLook);
+      PLAYER[consoleplayer]->yzangle=verticalLook;
+      Fix(PLAYER[consoleplayer]->yzangle);
+      }
+
+   if (profileMouse && (mousexmove || mouseymove))
+      {
+      printf("MOUSE raw=%d,%d mlook=%d scale=%d cmdYaw=%d horizon=%d camera=%d\n",
+             mousexmove,mouseymove,usemouselook,mouselookScale,MX,
+             PLAYERSTATE[consoleplayer].horizon,
+             PLAYER[consoleplayer] ? PLAYER[consoleplayer]->yzangle : 0);
+      fflush(stdout);
+      }
 
 }
 
@@ -4447,10 +4536,33 @@ void PlayerTiltHead (objtype * ob)
 
 	M_LINKSTATE(ob,pstate);
 
+   if (usemouselook && (ob==PLAYER[consoleplayer]))
+      {
+      int pitch=modernPitchFrac>>ANGLEBITS;
+
+      /* In modern mouselook mode the mouse owns local camera pitch outright.
+         Keep weapon auto-targeting for gameplay, but do not let the legacy
+         head-tilt/target/snapback state machine steer the view. */
+      if (pstate->guntarget && (oldpolltime>pstate->targettime))
+         {
+         pstate->guntarget->flags &= ~FL_TARGET;
+         pstate->guntarget=NULL;
+         }
+      if (pitch>YZANGLELIMIT)
+         pitch=YZANGLELIMIT;
+      else if (pitch<-YZANGLELIMIT)
+         pitch=-YZANGLELIMIT;
+      ob->yzangle=pitch;
+      Fix(ob->yzangle);
+      iG_playerTilt=ob->yzangle;
+      return;
+      }
+
    yzangle=ob->yzangle+HORIZONYZOFFSET;
    Fix(yzangle);
 
    if (
+        (!usemouselook) &&
         (pstate->lastmomz!=ob->momentumz) &&
         (ob->momentumz==0) &&
         (
@@ -4549,7 +4661,8 @@ void PlayerTiltHead (objtype * ob)
             SetNormalHorizon(ob);
             }
          }
-      if (!(ob->flags&FL_DOGMODE) &&
+      if ((!usemouselook) &&
+               !(ob->flags&FL_DOGMODE) &&
                !(ob->flags&FL_GODMODE) &&
                !(ob->flags&FL_FLEET)   &&
                !(ob->flags&FL_RIDING)  &&
@@ -4576,7 +4689,7 @@ void PlayerTiltHead (objtype * ob)
       }
 //SetTextMode();
 
-	if (yzangle != 512){
+	if ((!usemouselook) && (yzangle != 512)){
 		FinddTopYZANGLELIMITvalue(ob);
 	}
 
@@ -4587,8 +4700,10 @@ void PlayerTiltHead (objtype * ob)
 /*   else if (yzangle-HORIZONYZOFFSET<-TopYZANGLELIMIT)//bnafix
        yzangle=HORIZONYZOFFSET-TopYZANGLELIMIT;//bnafix
 dTopYZANGLELIMIT*/
-   else if (yzangle-HORIZONYZOFFSET<-dTopYZANGLELIMIT)//bnafix
-       yzangle=HORIZONYZOFFSET-dTopYZANGLELIMIT;//bnafix
+   else if (usemouselook && (yzangle-HORIZONYZOFFSET<-YZANGLELIMIT))
+       yzangle=HORIZONYZOFFSET-YZANGLELIMIT;
+   else if ((!usemouselook) && (yzangle-HORIZONYZOFFSET<-dTopYZANGLELIMIT))
+       yzangle=HORIZONYZOFFSET-dTopYZANGLELIMIT;
    ob->yzangle=yzangle-HORIZONYZOFFSET;
    Fix(ob->yzangle);
 

@@ -73,7 +73,7 @@ int    baseminshade;
 int    basemaxshade;
 int    viewheight;
 int    viewwidth;
-longword   heightnumerator;
+unsigned long long heightnumerator;
 fixed  scale;
 int    screenofs;
 int    centerx;
@@ -83,11 +83,12 @@ int    fulllight;
 int    weaponscale;
 int    viewsize;
 byte * colormap;
+byte * warmmap;
 byte * redmap;
 byte * greenmap;
 byte * playermaps[MAXPLAYERCOLORS];
 //short  pixelangle[MAXVIEWWIDTH];
-short  pixelangle[800];
+short  pixelangle[ROTT_MAX_RENDER_WIDTH];
 byte   gammatable[GAMMAENTRIES];
 int    gammaindex;
 int    focalwidth=160;
@@ -204,18 +205,13 @@ void SetViewDelta ( void )
 // calculate scale value for vertical height calculations
 // and sprite x calculations
 //
-	if ( iGLOBAL_SCREENWIDTH == 320) {
-		scale = (centerx*focalwidth)/(160);
-	}else if ( iGLOBAL_SCREENWIDTH == 640) {
-		scale = (centerx*focalwidth)/(160);
-	}else if ( iGLOBAL_SCREENWIDTH == 800) {
-		scale = (centerx*focalwidth)/(160);
-	}
+	scale = (centerx*focalwidth)/160;
 //
 // divide heightnumerator by a posts distance to get the posts height for
 // the heightbuffer.  The pixel height is height>>HEIGHTFRACTION
 //
-   heightnumerator = (((focalwidth/10)*centerx*4096)<<HEIGHTFRACTION);
+   heightnumerator = ((unsigned long long)(focalwidth/10)*centerx*4096)
+                     << HEIGHTFRACTION;
 }
 
 /*
@@ -331,6 +327,18 @@ void SetViewSize
         viewsizes[height++]= 800; viewsizes[height++]= 600;
         viewsizes[height++]= 800; viewsizes[height++]= 600;
 	}
+	else if (iGLOBAL_SCREENWIDTH>800)
+	{
+		int n;
+		for (n=0;n<MAXVIEWSIZES;n++)
+		{
+			int percent=(n>=7) ? 100 : 55+(n*6);
+			int w=(iGLOBAL_SCREENWIDTH*percent)/100;
+			int h=(iGLOBAL_SCREENHEIGHT*percent)/100;
+			viewsizes[n<<1]=w&~15;
+			viewsizes[(n<<1)+1]=h&~1;
+		}
+	}
 
 
 	if ((size<0) || (size>=MAXVIEWSIZES)){//bna added
@@ -358,7 +366,7 @@ void SetViewSize
       maxheight -= 24;
       }
 
-   if ( size < 9 )
+   if ( (size < 9) && (iGLOBAL_SCREENWIDTH <= 800) )
       {
       StatusBar |= TOP_STATUS_BAR;
 
@@ -370,7 +378,14 @@ void SetViewSize
 //   if ( size == 7 ){maxheight -= 16;}//bna++
 //   if ( size <= 6 ){topy -= 8;}//bna++
 
-   if ( size < 8 )
+   if (iGLOBAL_SCREENWIDTH > 800)
+      {
+      /* The legacy bars are 320-pixel artwork with many fixed coordinates.
+         Native rendering uses the unobtrusive corner stats until the HUD gets
+         its own logical-resolution composition pass. */
+      StatusBar |= STATUS_PLAYER_STATS;
+      }
+   else if ( size < 8 )
       {
       // Turn on health and ammo bar
       StatusBar |= BOTTOM_STATUS_BAR;
@@ -520,6 +535,28 @@ void LoadColorMap( void )
    for (i=31;i>=16;i--)
 		for (j=0xea;j<0xf9;j++)
          colormap[i*256+j]=colormap[(((i-16)/4+16))*256+j];
+
+   /* Generate a warm 32-level palette map for opt-in advanced lights.  The
+    * renderer remains indexed internally; each shaded source color is nudged
+    * toward firelight, then matched back to the original ROTT palette. */
+   warmmap=SafeMalloc((32*256)+255);
+   warmmap=(byte *)(((long)warmmap+255)&~0xff);
+   for (i=0;i<32;i++)
+      for (j=0;j<256;j++)
+         {
+         int source=colormap[(i*256)+j];
+         int r=origpal[(source*3)+0];
+         int g=origpal[(source*3)+1];
+         int b=origpal[(source*3)+2];
+
+         /* Preserve the artwork's luminance and hue structure: firelight is
+          * a warm multiplier, not an orange fog.  In particular, black stays
+          * black instead of becoming muddy brown across a whole wall tile. */
+         r=(r*6)/5; if (r>63) r=63;
+         g=(g*21)/20; if (g>63) g=63;
+         b=(b*4)/5;
+         warmmap[(i*256)+j]=BestColor(r,g,b,origpal);
+         }
 
 // Get special maps
 

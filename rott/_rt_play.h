@@ -23,7 +23,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "watcom.h"
 //double dTopYZANGLELIMIT; in winrott.c
 #define TopYZANGLELIMIT  (44*FINEANGLES/360)//bna added
-#define YZANGLELIMIT  (80*FINEANGLES/360)//bna--(30*FINEANGLES/360)
+#define YZANGLELIMIT  (89*FINEANGLES/360)
 /*
 //bna++ had to limit this or the sky would fuck up 
 #define TopYZANGLELIMIT  (6*FINEANGLES/360)//bna added

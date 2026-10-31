@@ -68,6 +68,12 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 
 extern void VH_UpdateScreen (void);
+extern bool usemouselook;
+
+byte *AdvancedRendererGetWallPixels(int lump)
+{
+   return (byte *)W_CacheLumpNum(lump,PU_CACHE,CvtNull,1);
+}
 
 
 
@@ -90,6 +96,11 @@ word   tilemap[MAPSIZE][MAPSIZE]; // wall values only
 byte   spotvis[MAPSIZE][MAPSIZE];
 byte   mapseen[MAPSIZE][MAPSIZE];
 unsigned long * lights;
+
+/* Render-only light contributed by animated flame torches.  Keeping this
+ * separate from the map's packed light data avoids changing simulation state
+ * or consuming gameplay random numbers in network games. */
+static byte dynamicTorchLight[MAPSIZE][MAPSIZE];
 
 int         wstart;
 
@@ -197,6 +208,250 @@ void DrawRotatedScreen(int cx, int cy, byte *destscreen, int angle, int scale, i
 void InterpolateMaskedWall (visobj_t * plane);
 void InterpolateDoor (visobj_t * plane);
 void InterpolateWall (visobj_t * plane);
+extern bool AdvancedRendererActive(void);
+extern void AdvancedRendererPrepareHud(void);
+byte *AdvancedRendererGetPatchPixels(int lump)
+{
+   return W_CacheLumpNum(lump,PU_CACHE,Cvt_patch_t,1);
+}
+
+byte *AdvancedRendererGetTransPatchPixels(int lump)
+{
+   return W_CacheLumpNum(lump,PU_CACHE,Cvt_transpatch_t,1);
+}
+
+extern void AdvancedRendererDrawWorld(const word *tiles,
+   const byte *specialOrientation,const word *specialTexture,
+   const signed short *specialPatches,
+   int mapsize,int worldHeight,float playerx,float playery,float cameraHeight,
+   float yaw,float pitch,const byte *floorPixels,const byte *ceilingPixels,
+   const byte *skyPixels,int skyRevision,int spriteCount,
+   const float *spriteX,const float *spriteY,const float *spriteZ,
+   const int *spriteLump,int weaponMain,int weaponAlt,
+   int weaponXOffset,int weaponYOffset,const byte *lightLevels,
+   int lightingEnabled,int darkAmbient,int coloredLights);
+
+static void AdvancedRendererWeapon(int *mainLump,int *altLump,
+   int *xOffset,int *yOffset)
+{
+   int index,female,black;
+   *mainLump=*altLump=-1;
+   *xOffset=*yOffset=0;
+   if (locplayerstate->weapon<0 ||
+       ((locplayerstate->NETCAPTURED==1) && !locplayerstate->HASKNIFE))
+      return;
+   female=(locplayerstate->player==1 || locplayerstate->player==3);
+   black=(locplayerstate->player==2);
+   if (locplayerstate->weapon==wp_twopistol)
+      {
+#if (SHAREWARE == 0)
+      if (female) { *altLump=W_FLEFTPISTOL1; *mainLump=W_FRIGHTPISTOL1; }
+      else if (black) { *altLump=W_BMLEFTPISTOL1; *mainLump=W_BMRIGHTPISTOL1; }
+      else
+#endif
+         { *altLump=W_MLEFTPISTOL1; *mainLump=W_MRIGHTPISTOL1; }
+      *altLump+=gunsstart;
+      *mainLump+=gunsstart;
+      if (locplayerstate->weaponframe>2)
+         *altLump+=locplayerstate->weaponframe-3;
+      else
+         *mainLump+=locplayerstate->weaponframe;
+      *xOffset=80;
+      }
+   else
+      {
+      if (locplayerstate->weapon==wp_pistol)
+         {
+         if (female) index=NUMWEAPGRAPHICS-2;
+         else if (black) index=NUMWEAPGRAPHICS-1;
+         else
+#if (SHAREWARE == 0)
+            index=1;
+#else
+            index=0;
+#endif
+         }
+      else
+#if (SHAREWARE == 0)
+         index=locplayerstate->weapon+1;
+#else
+         index=locplayerstate->weapon;
+#endif
+      if (index>=0 && index<NUMWEAPGRAPHICS)
+         *mainLump=gunsstart+weaponshape[index]+locplayerstate->weaponframe;
+      if (locplayerstate->weapon==wp_firewall || locplayerstate->weapon==wp_drunk)
+         *yOffset=10;
+      else if (locplayerstate->weapon==wp_heatseeker
+#if (SHAREWARE == 0)
+               || locplayerstate->weapon==wp_split
+#endif
+              )
+         *yOffset=20;
+      }
+   *yOffset+=locplayerstate->weaponheight;
+}
+
+static bool DynamicLightReaches (int fromx,int fromy,int tox,int toy)
+{
+   int x=fromx,y=fromy;
+   int dx=abs(tox-fromx),dy=abs(toy-fromy);
+   int stepx=(fromx<tox) ? 1 : -1;
+   int stepy=(fromy<toy) ? 1 : -1;
+   int error=dx-dy;
+
+   /* Tile-grid line of sight, deliberately stopping before the destination:
+    * a solid destination wall can receive light on its visible face, while
+    * intervening walls and closed doors block it. */
+   while ((x!=tox) || (y!=toy))
+      {
+      int twice=error<<1;
+      if (twice>-dy) { error-=dy; x+=stepx; }
+      if (twice< dx) { error+=dx; y+=stepy; }
+      if ((x==tox) && (y==toy))
+         return true;
+      if ((x<0) || (x>=MAPSIZE) || (y<0) || (y>=MAPSIZE) || tilemap[x][y])
+         return false;
+      }
+   return true;
+}
+
+static void AddDynamicFlameLight (int sourcex,int sourcey,int intensity)
+{
+   int dx,dy,x,y,dist2,falloff,level;
+
+   if (intensity<=0)
+      return;
+
+   for (dx=-4;dx<=4;dx++)
+      for (dy=-4;dy<=4;dy++)
+         {
+         x=sourcex+dx;
+         y=sourcey+dy;
+         if ((x<0) || (x>=MAPSIZE) || (y<0) || (y>=MAPSIZE))
+            continue;
+
+         dist2=(dx*dx)+(dy*dy);
+         if (dist2<=1)
+            falloff=0;
+         else if (dist2<=4)
+            falloff=2;
+         else if (dist2<=9)
+            falloff=5;
+         else if (dist2<=16)
+            falloff=7;
+         else
+            continue;
+
+         level=intensity-falloff;
+         if ((level<=0) || !DynamicLightReaches(sourcex,sourcey,x,y))
+            continue;
+
+         if (level>dynamicTorchLight[x][y])
+            dynamicTorchLight[x][y]=(byte)level;
+         }
+}
+
+static int FirejetLightIntensity (const objtype *actor)
+{
+   int shape,frame=-1;
+
+   if (!actor->state)
+      return 0;
+   shape=actor->state->shapenum;
+   if ((shape>=FIREJETUP1) && (shape<=FIREJETUP23))
+      frame=shape-FIREJETUP1;
+#if (SHAREWARE == 0)
+   else if ((shape>=FIREJETDOWN1) && (shape<=FIREJETDOWN23))
+      frame=shape-FIREJETDOWN1;
+#endif
+
+   /* Frame 1 is the long dormant pose.  The remaining sequence grows to a
+    * full jet, holds briefly, and retracts. */
+   if (frame<=0)
+      return 0;
+   if (frame<=7)
+      return frame+1;
+   if (frame<=15)
+      return 9;
+   return 24-frame;
+}
+
+static void BuildDynamicTorchLights (void)
+{
+   statobj_t *stat;
+   objtype *actor;
+   int flicker,phase,intensity;
+
+   memset(dynamicTorchLight,0,sizeof(dynamicTorchLight));
+   if (!advancedlighting)
+      return;
+
+   for (stat=FIRSTSTAT;stat;stat=stat->statnext)
+      {
+      if (stat->flags & FL_NONMARK)
+         continue;
+
+      switch (stat->itemnumber)
+         {
+         case stat_torch:
+         case stat_altbrazier1:
+            intensity=9;
+            break;
+         case stat_altbrazier2:
+            intensity=7;
+            break;
+         case stat_floorfire:
+            intensity=8;
+            break;
+         default:
+            continue;
+         }
+
+      /* Offset the phase by position so a room full of flames does not pulse
+       * in perfect unison.  GetTicCount is visual-only here. */
+      phase=GetTicCount()+(stat->tilex*7)+(stat->tiley*13);
+      flicker=advancedlightflicker ? (((phase>>2)^(phase>>4))&1) : 0;
+      AddDynamicFlameLight(stat->tilex,stat->tiley,intensity-flicker);
+      }
+
+   /* Fire jets are actors rather than static decorations.  Sampling their
+    * current state makes the light extend and retract with the visible flame. */
+   for (actor=FIRSTACTOR;actor;actor=actor->next)
+      if (actor->obclass==firejetobj)
+         AddDynamicFlameLight(actor->x>>16,actor->y>>16,
+                              FirejetLightIntensity(actor));
+}
+
+int GetDynamicTorchLight (int tilex, int tiley)
+{
+   if ((tilex<0) || (tilex>=MAPSIZE) || (tiley<0) || (tiley>=MAPSIZE))
+      return 0;
+   return dynamicTorchLight[tilex][tiley];
+}
+
+/* Bilinearly sample the tile light field at a 16.16 world position.  Grid
+ * values describe tile centres, hence the half-tile offset.  The returned
+ * value is 8.8 fixed point so the floor renderer can dither between ROTT's
+ * integer palette-shade levels instead of exposing square tile boundaries. */
+int GetSmoothDynamicTorchLight (int worldx, int worldy)
+{
+   int tilex,tiley,fracx,fracy;
+   int top,bottom;
+
+   worldx-=0x8000;
+   worldy-=0x8000;
+   tilex=worldx>>16;
+   tiley=worldy>>16;
+   fracx=(worldx&0xffff)>>8;
+   fracy=(worldy&0xffff)>>8;
+
+   top=GetDynamicTorchLight(tilex,tiley)*(256-fracx)+
+       GetDynamicTorchLight(tilex+1,tiley)*fracx;
+   bottom=GetDynamicTorchLight(tilex,tiley+1)*(256-fracx)+
+          GetDynamicTorchLight(tilex+1,tiley+1)*fracx;
+
+   return (top*(256-fracy)+bottom*fracy+128)>>8;
+}
 
 /*
 ==================
@@ -1152,8 +1407,7 @@ void DrawScaleds (void)
 		  || ( *(visspot+127)) )
 		  {
 
-//        result = TransformObject (obj->drawx, obj->drawy,&(visptr->viewx),&(visptr->viewheight));
-        result = TransformObject (obj->x, obj->y,&(visptr->viewx),&(visptr->viewheight));
+        result=TransformObject(obj->x,obj->y,&(visptr->viewx),&(visptr->viewheight));
         if ((result==false) || (visptr->viewheight< (1<<(HEIGHTFRACTION+2))))
 			  continue;                         // to close to the object
 		  if (obj->state->rotate)
@@ -1619,6 +1873,9 @@ void SetSpriteLightLevel (int x, int y, visobj_t * sprite, int dir, int fullbrig
    int i;
    int lv;
    int intercept;
+   int dynamiclv;
+   int ambient;
+   byte *map;
 
    whereami=10;
 
@@ -1642,6 +1899,10 @@ void SetSpriteLightLevel (int x, int y, visobj_t * sprite, int dir, int fullbrig
       }
    else
       {
+      dynamiclv=GetDynamicTorchLight(x>>16,y>>16);
+      ambient=(advancedlighting && advanceddarkambient) ? 7 : 0;
+      map=(advancedlighting && advancedcoloredlights && dynamiclv) ? warmmap : colormap;
+      lv=dynamiclv;
       if (lightsource)
          {
     	   if (dir==east || dir==west)
@@ -1649,17 +1910,14 @@ void SetSpriteLightLevel (int x, int y, visobj_t * sprite, int dir, int fullbrig
          else
             intercept=(y>>11)&0x1c;
 
-         lv=(((LightSourceAt(x>>16,y>>16)>>intercept)&0xf)>>1);
-         i=maxshade-(sprite->viewheight>>normalshade)-lv;
-         if (i<minshade) i=minshade;
-         sprite->colormap=colormap+(i<<8);
+         lv+=(((LightSourceAt(x>>16,y>>16)>>intercept)&0xf)>>1);
          }
-      else
-         {
-         i=maxshade-(sprite->viewheight>>normalshade);
-         if (i<minshade) i=minshade;
-         sprite->colormap=colormap+(i<<8);
-         }
+      i=maxshade-(sprite->viewheight>>normalshade);
+      if (i<minshade) i=minshade;
+      i+=ambient-lv;
+      if (i>31) i=31;
+      if (i<minshade) i=minshade;
+      sprite->colormap=map+(i<<8);
       }
 }
 
@@ -1677,6 +1935,7 @@ void SetColorLightLevel (int x, int y, visobj_t * sprite, int dir, int color, in
    int lv;
    int intercept;
    int height;
+   int ambient;
    byte * map;
 
 
@@ -1703,6 +1962,8 @@ void SetColorLightLevel (int x, int y, visobj_t * sprite, int dir, int color, in
       }
    else
       {
+      lv=GetDynamicTorchLight(x>>16,y>>16);
+      ambient=(advancedlighting && advanceddarkambient) ? 7 : 0;
       if (lightsource)
          {
     	   if (dir==east || dir==west)
@@ -1710,17 +1971,14 @@ void SetColorLightLevel (int x, int y, visobj_t * sprite, int dir, int color, in
          else
             intercept=(y>>11)&0x1c;
 
-         lv=(((LightSourceAt(x>>16,y>>16)>>intercept)&0xf)>>1);
-         i=maxshade-(height>>normalshade)-lv;
-         if (i<minshade) i=minshade;
-         sprite->colormap=map+(i<<8);
+         lv+=(((LightSourceAt(x>>16,y>>16)>>intercept)&0xf)>>1);
          }
-      else
-         {
-         i=maxshade-(height>>normalshade);
-         if (i<minshade) i=minshade;
-         sprite->colormap=map+(i<<8);
-         }
+      i=maxshade-(height>>normalshade);
+      if (i<minshade) i=minshade;
+      i+=ambient-lv;
+      if (i>31) i=31;
+      if (i<minshade) i=minshade;
+      sprite->colormap=map+(i<<8);
       }
 }
 
@@ -1737,6 +1995,10 @@ void SetWallLightLevel (wallcast_t * post)
    int la;
    int lv;
    int i;
+   int x,y;
+   int dynamiclv;
+   int ambient;
+   byte *map;
 
    whereami=12;
 	if (MISCVARS->GASON==1)
@@ -1761,32 +2023,33 @@ void SetWallLightLevel (wallcast_t * post)
          break;
       }
 
+   x=post->offset>>7;
+   y=post->offset&0x7f;
+   dynamiclv=GetDynamicTorchLight(x,y);
+   ambient=(advancedlighting && advanceddarkambient) ? 7 : 0;
+   map=(advancedlighting && advancedcoloredlights && dynamiclv) ? warmmap : colormap;
+   lv=dynamiclv;
    if (lightsource)
       {
-      int x,y;
       int intercept;
 
-      x=post->offset>>7;
-      y=post->offset&0x7f;
       intercept=(post->texture>>11)&0x1c;
-      lv=(((LightSourceAt(x,y)>>intercept)&0xf)>>1);
+      lv+=(((LightSourceAt(x,y)>>intercept)&0xf)>>1);
       }
-   else
-      lv=0;
    if (fulllight)
       {
       if (fog)
          {
          i =16+minshade-lv+la;
          if (i>maxshade+la) i=maxshade+la;
-         shadingtable=colormap+(i<<8);
+         shadingtable=map+(i<<8);
          }
       else
          {
          i =maxshade-16-lv+la;
          if (i>=maxshade) i=maxshade;
          if (i<minshade+la) i=minshade+la;
-         shadingtable=colormap+(i<<8);
+         shadingtable=map+(i<<8);
          }
       return;
       }
@@ -1794,14 +2057,17 @@ void SetWallLightLevel (wallcast_t * post)
       {
       i =((post->wallheight*200/iGLOBAL_SCREENHEIGHT)>>normalshade)+minshade-lv+la;
       if (i>maxshade+la) i=maxshade+la;
-      shadingtable=colormap+(i<<8);
+      shadingtable=map+(i<<8);
       }
    else
       {
-      i =maxshade-(post->wallheight>>normalshade)-lv+la;
-      if (i>=maxshade) i=maxshade;
+      i=maxshade-(post->wallheight>>normalshade)+la;
       if (i<minshade+la) i=minshade+la;
-      shadingtable=colormap+(i<<8);
+      if (i>maxshade+la) i=maxshade+la;
+      i+=ambient-lv;
+      if (i>31) i=31;
+      if (i<minshade+la) i=minshade+la;
+      shadingtable=map+(i<<8);
       }
 }
 
@@ -2237,15 +2503,17 @@ void WallRefresh (void)
       {
       if (player->flags&FL_SHROOMS)
          {
-         viewangle = (player->angle + FixedMulShift(FINEANGLES,sintable[(GetTicCount()<<5)&(FINEANGLES-1)],(16+4)))&(FINEANGLES-1);
-         ChangeFocalWidth(FixedMulShift(40,sintable[(GetTicCount()<<5)&(FINEANGLES-1)],16));
+         viewangle=(player->angle+FixedMulShift(FINEANGLES,
+            sintable[(GetTicCount()<<5)&(FINEANGLES-1)],(16+4)))&(FINEANGLES-1);
+         ChangeFocalWidth(FixedMulShift(40,
+            sintable[(GetTicCount()<<5)&(FINEANGLES-1)],16));
          }
       else
-         viewangle = player->angle;
+         viewangle=player->angle;
       if ((viewangle<0) && (viewangle>=FINEANGLES))
          Error ("View angle out of range = %d\n",viewangle);
-      viewx = player->x;
-      viewy = player->y;
+      viewx=player->x;
+      viewy=player->y;
       pheight = player->z + locplayerstate->playerheight + locplayerstate->heightoffset;
       nonbobpheight=pheight;
       if (
@@ -2265,8 +2533,8 @@ void WallRefresh (void)
 
          pheight+=FixedMulShift(mag,sintable[(GetTicCount()<<7)&2047],28);
 
-         weaponbobx=FixedMulShift(mag,costable[((GetTicCount()<<5))&(FINEANGLES-1)],27);
-         weaponboby=FixedMulShift(mag,sintable[((GetTicCount()<<5))&((FINEANGLES/2)-1)],26);
+         weaponbobx=FixedMulShift(mag,costable[(GetTicCount()<<5)&(FINEANGLES-1)],27);
+         weaponboby=FixedMulShift(mag,sintable[(GetTicCount()<<5)&((FINEANGLES/2)-1)],26);
 			}
       else
          {
@@ -2277,19 +2545,39 @@ void WallRefresh (void)
       spotvis[player->tilex][player->tiley]=1;
       }
 
-	if (yzangle > ANG180)
-      pheight -= (sintable[yzangle&2047] >> 14);
-	else
-      pheight += (sintable[yzangle&2047] >> 14);
+	if ((!usemouselook) || missobj)
+      {
+	  if (yzangle > ANG180)
+         pheight -= (sintable[yzangle&2047] >> 14);
+	  else
+         pheight += (sintable[yzangle&2047] >> 14);
 
-   viewx -= (FixedMul(sintable[yzangle&2047],costable[viewangle&2047])>>1);
-   viewy += (FixedMul(sintable[yzangle&2047],sintable[viewangle&2047])>>1);
+      viewx -= (FixedMul(sintable[yzangle&2047],costable[viewangle&2047])>>1);
+      viewy += (FixedMul(sintable[yzangle&2047],sintable[viewangle&2047])>>1);
+      }
 
 // Set YZ angle
 
    centery=viewheight>>1;
 
-	if (yzangle>ANG180)
+   if (usemouselook && !missobj)
+      {
+      int signedpitch=(yzangle>ANG180) ? yzangle-FINEANGLES : yzangle;
+      int cosine=costable[signedpitch&(FINEANGLES-1)];
+      long long offset;
+      int limit=viewheight<<1;
+
+      /* Perspective-correct y-shear for a stationary camera.  ROTT remains a
+         column renderer, but tan(pitch)*focal-length gives natural freelook
+         and a useful near-vertical range without the old camera orbit. */
+      if (cosine<1)
+         cosine=1;
+      offset=((long long)sintable[signedpitch&(FINEANGLES-1)]*scale)/cosine;
+      if (offset>limit) offset=limit;
+      else if (offset<-limit) offset=-limit;
+      centery+=(int)offset;
+      }
+	else if (yzangle>ANG180)
 		centery-=FixedMul(FINEANGLES-yzangle,yzangleconverter);
 	else
 		centery+=FixedMul(yzangle,yzangleconverter);
@@ -2750,6 +3038,119 @@ void      ThreeDRefresh (void)
       }
 #endif
 
+   if (AdvancedRendererActive() && player)
+      {
+      static byte specialOrientation[MAPSIZE*MAPSIZE];
+      static word specialTexture[MAPSIZE*MAPSIZE];
+      static signed short specialPatches[MAPSIZE*MAPSIZE*3];
+      static float gpuSpriteX[MAXVISIBLE],gpuSpriteY[MAXVISIBLE];
+      static float gpuSpriteZ[MAXVISIBLE];
+      static int gpuSpriteLump[MAXVISIBLE];
+      int gpuSpriteCount=0;
+      int gpuWeaponMain,gpuWeaponAlt,gpuWeaponX,gpuWeaponY;
+      statobj_t *gpuStat;
+      objtype *gpuActor;
+      int x,y;
+      int signedpitch=(player->yzangle>ANG180) ?
+         player->yzangle-FINEANGLES : player->yzangle;
+      float yaw=(float)player->angle*(360.0f/(float)FINEANGLES);
+      float pitch=(float)signedpitch*(360.0f/(float)FINEANGLES);
+      float gpuCameraHeight=(float)(nominalheight-player->z+
+         locplayerstate->playerheight+locplayerstate->heightoffset)/64.0f;
+
+      /* The software wall pass normally refreshes these globals.  Player
+         movement also consumes them, so keep them authoritative even when
+         the GPU renderer bypasses the software pass. */
+      viewangle=player->angle;
+      viewsin=sintable[viewangle];
+      viewcos=costable[viewangle];
+
+      /* The classic fizzle transition normally starts gameplay controls at
+         the end of the first rendered frame.  Advanced rendering bypasses
+         that transition, so complete the same state change explicitly. */
+      if (fizzlein)
+         {
+         fizzlein=false;
+         if (controlupdatestarted==0)
+            StartupClientControls();
+         }
+      /* The classic renderer pumped input/network events several times while
+         drawing.  The GPU path is much faster, so explicitly service SDL once
+         before presenting to keep Windows and relative mouse input live. */
+      IN_PumpEvents();
+      BuildDynamicTorchLights();
+      memset(specialOrientation,0,sizeof(specialOrientation));
+      memset(specialTexture,0,sizeof(specialTexture));
+      for (x=0;x<MAPSIZE*MAPSIZE*3;x++) specialPatches[x]=-1;
+      for (x=0;x<MAPSIZE;x++)
+         for (y=0;y<MAPSIZE;y++)
+            {
+            word tile=tilemap[x][y];
+            int index=tile&0x3ff;
+            if (M_ISDOOR(x,y) && (index<MAXDOORS) && doorobjlist[index])
+               {
+               specialOrientation[x*MAPSIZE+y]=doorobjlist[index]->vertical ? 1 : 2;
+               specialTexture[x*MAPSIZE+y]=doorobjlist[index]->texture;
+               }
+            else if (M_ISMWALL(x,y) && (index<MAXMASKED) && maskobjlist[index])
+               {
+               int cell=x*MAPSIZE+y;
+               specialOrientation[cell]=maskobjlist[index]->vertical ? 1 : 2;
+               specialPatches[cell*3]=maskobjlist[index]->bottomtexture;
+               specialPatches[cell*3+1]=maskobjlist[index]->midtexture;
+               specialPatches[cell*3+2]=maskobjlist[index]->toptexture;
+               }
+            }
+
+      for (gpuStat=firstactivestat;gpuStat && gpuSpriteCount<MAXVISIBLE;
+           gpuStat=gpuStat->nextactive)
+         if (gpuStat->shapenum!=NOTHING &&
+             abs(gpuStat->tilex-player->tilex)<=32 &&
+             abs(gpuStat->tiley-player->tiley)<=32)
+            {
+            int lump=gpuStat->shapenum+shapestart;
+            if (gpuStat->flags&FL_ROTATING) lump+=StatRotate(gpuStat);
+            gpuSpriteX[gpuSpriteCount]=(float)gpuStat->x/(float)TILEGLOBAL;
+            gpuSpriteY[gpuSpriteCount]=(float)gpuStat->y/(float)TILEGLOBAL;
+            gpuSpriteZ[gpuSpriteCount]=(float)(nominalheight-gpuStat->z)/64.0f;
+            gpuSpriteLump[gpuSpriteCount++]=lump;
+            }
+      for (gpuActor=firstactive;gpuActor && gpuSpriteCount<MAXVISIBLE;
+           gpuActor=gpuActor->nextactive)
+         if (gpuActor!=player && gpuActor->shapenum!=NOTHING &&
+             abs(gpuActor->tilex-player->tilex)<=32 &&
+             abs(gpuActor->tiley-player->tiley)<=32)
+            {
+            int lump=gpuActor->shapenum+shapestart;
+            if (gpuActor->state && gpuActor->state->rotate)
+               lump+=CalcRotate(gpuActor);
+            gpuSpriteX[gpuSpriteCount]=(float)gpuActor->x/(float)TILEGLOBAL;
+            gpuSpriteY[gpuSpriteCount]=(float)gpuActor->y/(float)TILEGLOBAL;
+            gpuSpriteZ[gpuSpriteCount]=(float)(nominalheight-gpuActor->z)/64.0f;
+            gpuSpriteLump[gpuSpriteCount++]=lump;
+            }
+      AdvancedRendererWeapon(&gpuWeaponMain,&gpuWeaponAlt,
+         &gpuWeaponX,&gpuWeaponY);
+      AdvancedRendererPrepareHud();
+      if (SHOW_PLAYER_STATS())
+         DrawStats();
+      AdvancedRendererDrawWorld(&tilemap[0][0],specialOrientation,
+         specialTexture,specialPatches,MAPSIZE,levelheight,
+         (float)player->x/(float)TILEGLOBAL,
+         (float)player->y/(float)TILEGLOBAL,gpuCameraHeight,
+         yaw,pitch,
+         AdvancedRendererFloorPixels(),AdvancedRendererCeilingPixels(),
+         AdvancedRendererSkyPixels(),AdvancedRendererSkyRevision(),
+         gpuSpriteCount,gpuSpriteX,gpuSpriteY,gpuSpriteZ,gpuSpriteLump,
+         gpuWeaponMain,gpuWeaponAlt,gpuWeaponX,gpuWeaponY,
+         &dynamicTorchLight[0][0],advancedlighting,advanceddarkambient,
+         advancedcoloredlights);
+      XFlipPage();
+      gamestate.frame++;
+      player=tempptr;
+      return;
+      }
+
 //
 // Erase old messages
 //
@@ -2766,6 +3167,7 @@ void      ThreeDRefresh (void)
 // follow the walls from there to the right, drawwing as we go
 //
 
+	BuildDynamicTorchLights ();
 	visptr = &vislist[0];
 	WallRefresh ();
 
@@ -3265,6 +3667,16 @@ void ScaleAndRotateBuffer (int startangle, int endangle, int startscale, int end
 void RotateBuffer (int startangle, int endangle, int startscale, int endscale, int time)
 {
    int savetics;
+
+   /* The original transition stores its source image in a fixed 512/1024-byte
+      layout and only has implementations for 320, 640 and 800 pixel modes.
+      At native resolutions the gameplay frame is already complete, so present
+      it directly instead of entering that legacy buffer path. */
+   if (iGLOBAL_SCREENWIDTH > 800)
+      {
+      FlipPage();
+      return;
+      }
 
    //save off fastcounter
 

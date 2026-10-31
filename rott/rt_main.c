@@ -177,6 +177,21 @@ extern void RottConsole ( void );
 extern void	ReadDelay(long delay);
 extern void RecordDemoQuery ( void );
 
+#if USE_SDL
+static Uint32 startupStart;
+static bool startupProfiling;
+
+static void StartupMark (const char *stage)
+{
+   if (!startupProfiling)
+      return;
+   printf("[startup +%lu ms] %s\n",(unsigned long)(SDL_GetTicks()-startupStart),stage);
+   fflush(stdout);
+}
+#else
+#define StartupMark(stage) ((void)0)
+#endif
+
 int main (int argc, char *argv[])
 {
     char *macwd;
@@ -185,6 +200,12 @@ int main (int argc, char *argv[])
 	_argc = argc;
 	_argv = argv;
 #endif
+
+#if USE_SDL
+   startupProfiling=CheckParm("PROFILESTARTUP")!=0;
+   startupStart=SDL_GetTicks();
+#endif
+   StartupMark("process entry");
 
 #if defined(PLATFORM_MACOSX)
     {
@@ -216,6 +237,7 @@ int main (int argc, char *argv[])
 #	endif
 
    if (setup_homedir() == -1) return 1;
+   StartupMark("home directory ready");
 #endif
 
    // Set which release version we're on
@@ -265,19 +287,26 @@ int main (int argc, char *argv[])
    Z_Init(50000,1000000);
 
    IN_Startup ();
+   StartupMark("input startup complete");
 
    InitializeGameCommands();
    if (standalone==false)
       {
       ReadConfig ();
+      StartupMark("configuration read");
       ReadSETUPFiles ();
+      StartupMark("setup files read");
       doublestep=0;
       SetupWads();
+      StartupMark("WADs loaded");
       BuildTables ();
+      StartupMark("render tables built");
       GetMenuInfo ();
+      StartupMark("menu data loaded");
       }
 
    SetRottScreenRes (iGLOBAL_SCREENWIDTH, iGLOBAL_SCREENHEIGHT);
+   StartupMark("screen settings selected");
    
 //   if (modemgame==true)
 //      {
@@ -299,6 +328,7 @@ int main (int argc, char *argv[])
          if (!quiet)
             printf( "MU_Startup: " );
          status1 = MU_Startup(false);
+         StartupMark("music startup complete");
          if (!quiet)
             printf( "%s\n", MUSIC_ErrorString( MUSIC_Error ) );
          }
@@ -320,6 +350,7 @@ int main (int argc, char *argv[])
          if (!quiet)
             printf( "SD_SetupFXCard: " );
          status2 = SD_SetupFXCard (&nv, &nb, &nc);
+         StartupMark("sound card setup complete");
          if (!quiet)
             printf( "%s\n", FX_ErrorString( FX_Error ) );
 
@@ -328,6 +359,7 @@ int main (int argc, char *argv[])
             if (!quiet)
                printf( "SD_Startup: " );
             status3 = SD_Startup(false);
+            StartupMark("sound effects startup complete");
             if (!quiet)
                printf( "%s\n", FX_ErrorString( FX_Error ) );
             }
@@ -368,6 +400,7 @@ int main (int argc, char *argv[])
       InitializeRNG ();
       InitializeMessages();
       LoadColorMap();
+      StartupMark("game tables and palette loaded");
       }
    if (infopause==true)
       {
@@ -376,6 +409,7 @@ int main (int argc, char *argv[])
       }
    I_StartupTimer();
    I_StartupKeyboard();
+   StartupMark("timer and keyboard ready");
 #if 0
 #if (SHAREWARE == 1)
    if ((!SOUNDSETUP) && (standalone==false))
@@ -397,6 +431,7 @@ int main (int argc, char *argv[])
       ServerLoop();
 
    VL_SetVGAPlaneMode();
+   StartupMark("video window created");
    VL_SetPalette(origpal);
 
 //   SetTextMode();
@@ -628,6 +663,9 @@ void CheckCommandLineParameters( void )
 #endif
       printf ("   SPACEBALL  - Enable check for Spaceball.\n");
       printf ("   NOJOYS     - Disable check for joystick.\n");
+      printf ("   JOYS       - Enable joystick/gamepad detection.\n");
+      printf ("   PROFILESTARTUP - Print startup-stage timing.\n");
+      printf ("   ADVANCEDRENDERER - Use the new OpenGL renderer backend.\n");
       printf ("   NOMOUSE    - Disable check for mouse.\n");
       printf ("   CYBERMAN   - Enable check for Cyberman.\n");
       printf ("   ASSASSIN   - Enable check for Wingman Assassin.\n");
@@ -890,10 +928,11 @@ void SetupWads( void )
             if (i < _argc)
             {
                int width, height;
-               if ( (sscanf(_argv[i], "%dx%d", &width, &height) == 2) &&
-                    ( ( (width == 320) && (height == 200) ) ||
-                      ( (width == 640) && (height == 480) ) ||
-                      ( (width == 800) && (height == 600) ) ) )
+               if ((sscanf(_argv[i], "%dx%d", &width, &height) == 2) &&
+                   (((width == 320) && (height == 200)) ||
+                    ((width>=640) && (width<=ROTT_MAX_RENDER_WIDTH) &&
+                     (height>=400) && (height<=ROTT_MAX_RENDER_HEIGHT) &&
+                     !(width&1) && !(height&1))))
                {
                  iGLOBAL_SCREENWIDTH  = width;
                  iGLOBAL_SCREENHEIGHT = height;
@@ -2174,7 +2213,12 @@ fromloadedgame:
          }
       else
          {
-         if (controlupdatestarted == 1)
+         /* The original loop called UpdateGameObjects for every displayed
+            frame.  CalcTics then busy-waited for the next 35 Hz simulation
+            tic, unintentionally making the renderer a 35 FPS renderer too.
+            Keep the deterministic simulation/network clock unchanged, but
+            allow presentation frames between simulation tics. */
+         if ((controlupdatestarted == 1) && (GetTicCount() != oldtime))
             UpdateGameObjects();
 
          atime = GetFastTics();

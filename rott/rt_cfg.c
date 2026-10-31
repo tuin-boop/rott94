@@ -134,6 +134,10 @@ bool BobbinOn         = true;
 int     Menuflipspeed    = 15;
 int     DetailLevel      = 2;         //HI DETAIL
 int     fandc            = 1;
+bool    advancedlighting = false;
+bool    advancedcoloredlights = true;
+bool    advancedlightflicker = true;
+bool    advanceddarkambient = true;
 int     blanktime        = (2*60*VBLCOUNTER);
 bool ConfigLoaded     = false;
 bool stereoreversed   = false;
@@ -541,6 +545,12 @@ bool ParseConfigFile (void)
       
       // Read in fullscreen
       ReadBoolean("FullScreen", &sdl_fullscreen);
+
+      // Optional modernized renderer. Classic presentation remains default.
+      ReadBoolean("AdvancedLighting", &advancedlighting);
+      ReadBoolean("AdvancedColoredLights", &advancedcoloredlights);
+      ReadBoolean("AdvancedLightFlicker", &advancedlightflicker);
+      ReadBoolean("AdvancedDarkAmbient", &advanceddarkambient);
       
       // Read in resolution
       ReadInt("ScreenWidth", &iGLOBAL_SCREENWIDTH);
@@ -1859,6 +1869,13 @@ void WriteConfig (void)
    SafeWriteString(file,"; 0 - Start in windowed mode\n");
    SafeWriteString(file,"; 1 - Start in fullscreen mode\n");
    WriteParameter(file,"FullScreen       ",sdl_fullscreen);
+
+   SafeWriteString(file,"\n;\n");
+   SafeWriteString(file,"; Opt-in advanced lighting; classic ROTT remains the default\n");
+   WriteParameter(file,"AdvancedLighting       ",advancedlighting);
+   WriteParameter(file,"AdvancedColoredLights  ",advancedcoloredlights);
+   WriteParameter(file,"AdvancedLightFlicker   ",advancedlightflicker);
+   WriteParameter(file,"AdvancedDarkAmbient    ",advanceddarkambient);
       
    // Write out resolution
    SafeWriteString(file,"\n;\n");

@@ -71,6 +71,20 @@ void SetRottScreenRes (int Width, int Height)
 	
 		dTopYZANGLELIMIT = (90*FINEANGLES/360);;
 	}
+	if (iGLOBAL_SCREENWIDTH > 800) {
+		/* Keep the original 320x200 projection's vertical scale.  Scaling
+		   focal width directly with a widescreen framebuffer made 2560x1440
+		   more than three times too narrow/zoomed.  This aspect-aware form
+		   preserves vertical FOV and lets widescreen reveal more horizontally. */
+		iGLOBAL_FOCALWIDTH = (256*iGLOBAL_SCREENHEIGHT +
+		                      iGLOBAL_SCREENWIDTH/2) / iGLOBAL_SCREENWIDTH;
+		dGLOBAL_FPFOCALWIDTH = (double)iGLOBAL_FOCALWIDTH;
+		iGLOBAL_HEALTH_X = iGLOBAL_SCREENWIDTH/20;
+		iGLOBAL_HEALTH_Y = iGLOBAL_SCREENHEIGHT-15;
+		iGLOBAL_AMMO_X = iGLOBAL_SCREENWIDTH-(iGLOBAL_SCREENWIDTH/16);
+		iGLOBAL_AMMO_Y = iGLOBAL_SCREENHEIGHT-16;
+		dTopYZANGLELIMIT = (89*FINEANGLES/360);
+	}
 
 	//dYZANGLELIMIT = (12*FINEANGLES/360);
 	//#define YZANGLELIMIT  (12*FINEANGLES/360)//bna--(30*FINEANGLES/360)

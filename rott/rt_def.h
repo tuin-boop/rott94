@@ -163,6 +163,11 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #define TILEWIDTH               4
 #define STATUSLINES             16
 
+/* Modern Windows renderer ceiling.  These size render-time lookup arrays;
+ * actual buffers still use the resolution selected at launch. */
+#define ROTT_MAX_RENDER_WIDTH   3840
+#define ROTT_MAX_RENDER_HEIGHT  2160
+
 
 
 //***************************************************************************

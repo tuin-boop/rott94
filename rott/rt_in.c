@@ -177,7 +177,7 @@ static   Direction   DirTable[] =      // Quick lookup for total direction
 
 int (far *function_ptr)();
 
-static char *ParmStrings[] = {"nojoys","nomouse","spaceball","cyberman","assassin",NULL};
+static char *ParmStrings[] = {"nojoys","nomouse","spaceball","cyberman","assassin","joys",NULL};
 
 
 #if USE_SDL
@@ -1162,7 +1162,14 @@ sdl_mouse_grabbed = 1;
     scancodes[SDL_SCANCODE_KP_ENTER]        = sc_Return;
 #endif
 
+#if PLATFORM_WIN32
+   /* SDL's legacy HID enumeration can block Windows startup for tens of
+    * seconds on some systems.  Keyboard and mouse remain immediate; modern
+    * controller probing is available explicitly with -joys. */
+   checkjoys        = false;
+#else
    checkjoys        = true;
+#endif
    checkmouse       = true;
    checkcyberman    = false;
    checkassassin    = false;
@@ -1195,6 +1202,10 @@ sdl_mouse_grabbed = 1;
       case 4:
          checkassassin = true;
          checkmouse = false;
+      break;
+
+      case 5:
+         checkjoys = true;
       break;
       }
    }

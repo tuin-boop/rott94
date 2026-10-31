@@ -35,8 +35,8 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "w_wad.h"
 #include "z_zone.h"
 #include "rt_view.h"
-#include "rt_ted.h"
 #include "rt_cfg.h"
+#include "rt_ted.h"
 #include "rt_actor.h"
 #include <string.h>
 #include "isr.h"
@@ -76,12 +76,38 @@ byte *   mr_src;
 static byte     *g_floor;
 static byte     *ceiling;
 //static int xstarts[MAXVIEWHEIGHT];
-static int xstarts[600];//set to max hight res
+static int xstarts[ROTT_MAX_RENDER_HEIGHT];
 static byte * skysegs[MAXSKYSEGS];
 static byte * skydata[MAXSKYDATA];
 static int      horizonheight;
 static int      centerskypost;
 static int      oldsky=-1;
+static byte     advancedSkyTile[64*64];
+static bool     advancedSkyAvailable=false;
+static int      advancedSkyRevision=0;
+
+const byte *AdvancedRendererFloorPixels(void)
+{
+   return g_floor;
+}
+
+const byte *AdvancedRendererCeilingPixels(void)
+{
+   return ceiling;
+}
+
+const byte *AdvancedRendererSkyPixels(void)
+{
+   /* MakeSkyData builds the complete 256-column by 400-row panorama in
+      column-major order.  The GPU renderer can preserve far more of the
+      original sky than the small compatibility tile. */
+   return advancedSkyAvailable ? skydata[0] : NULL;
+}
+
+int AdvancedRendererSkyRevision(void)
+{
+   return advancedSkyRevision;
+}
 
 
 //bna fixit skyerror by 800x600 clouds not big enough
@@ -404,6 +430,8 @@ void SetPlaneViewSize (void)
    int      skybottom;
 
    sky=0;
+   advancedSkyAvailable=false;
+   advancedSkyRevision++;
 
    if (oldsky>0)
       {
@@ -502,6 +530,8 @@ void SetPlaneViewSize (void)
                x=511;
                }
             } /* endfor */
+         MakeSkyTile(advancedSkyTile);
+         advancedSkyAvailable=true;
          }
 }
 
@@ -515,6 +545,7 @@ void SetPlaneViewSize (void)
 void SetFCLightLevel (int height)
 {
    int i;
+   int ambient=(advancedlighting && advanceddarkambient) ? 7 : 0;
 
 	if (MISCVARS->GASON==1)
       {
@@ -534,8 +565,13 @@ void SetFCLightLevel (int height)
       }
    else
       {
+      /* First preserve ROTT's classic distance shade, then place that result
+       * in the darker advanced-lighting ambience.  Doing both before the
+       * classic clamp erased torch contrast on nearby floor pixels. */
       i=maxshade-(height>>normalshade);
       if (i<minshade) i=minshade;
+      i+=ambient;
+      if (i>31) i=31;
       shadingtable=colormap+(i<<8);
       }
 }
@@ -732,18 +768,70 @@ void DrawPlanes( void )
 #ifndef DOS
 void DrawRow(int count, byte * dest, byte * src)
 {
+	static const byte bayer4[16]={0,8,2,10,12,4,14,6,3,11,1,9,15,7,13,5};
 	unsigned frac, fracstep;
 	int coord;
+	int baseShade=0;
+	int lightX=mr_xfrac;
+	int lightY=mr_yfrac;
+	bool advancedFloor=false;
 
 	frac = (mr_yfrac<<16) + (mr_xfrac&0xffff);
 	fracstep = (mr_ystep<<16) + (mr_xstep&0xffff);
+	if (advancedlighting && !fulllight && !fog && (MISCVARS->GASON!=1) &&
+	    (shadingtable>=colormap) && (shadingtable<colormap+(32*256)))
+	{
+		baseShade=(int)((shadingtable-colormap)>>8);
+		advancedFloor=true;
+	}
 
-	while (count--) {
-		/* extract the x/y coordinates */
-		coord = ((frac >> (32-7)) | ((frac >> (32-23)) << 7)) & 16383;
-		
-		*dest++ = shadingtable[src[coord]];
-		frac += fracstep;
+	if (advancedFloor)
+	{
+		/* Bilinear light sampling used to run once for every floor pixel.  At
+		 * 1440p that dominates the renderer.  The light field varies slowly,
+		 * so sample it at eight-pixel intervals and linearly interpolate the
+		 * same smooth field inside each span. */
+		while (count>0)
+		{
+			int run=(count>8) ? 8 : count;
+			int lightStart=GetSmoothDynamicTorchLight(lightX*2,lightY*2);
+			int lightEnd=GetSmoothDynamicTorchLight((lightX+mr_xstep*run)*2,
+			                                             (lightY+mr_ystep*run)*2);
+			int lightAcc=lightStart<<16;
+			int lightStep=((lightEnd-lightStart)<<16)/run;
+			int i;
+
+			for (i=0;i<run;i++)
+			{
+				int lightFixed=lightAcc>>16;
+				int light=lightFixed>>8;
+				int threshold=bayer4[(((lightY>>11)&3)<<2)+((lightX>>11)&3)]<<4;
+				int shade=baseShade-light;
+				byte *map=(advancedcoloredlights && lightFixed) ? warmmap : colormap;
+
+				coord=((frac>>(32-7))|((frac>>(32-23))<<7))&16383;
+				if ((lightFixed&0xff)>threshold)
+					shade--;
+				if (shade<minshade) shade=minshade;
+				if (shade>31) shade=31;
+				*dest++=map[(shade<<8)+src[coord]];
+
+				frac+=fracstep;
+				lightX+=mr_xstep;
+				lightY+=mr_ystep;
+				lightAcc+=lightStep;
+			}
+			count-=run;
+		}
+	}
+	else
+	{
+		while (count--)
+		{
+			coord=((frac>>(32-7))|((frac>>(32-23))<<7))&16383;
+			*dest++=shadingtable[src[coord]];
+			frac+=fracstep;
+		}
 	}
 }
 #endif

@@ -60,6 +60,10 @@ extern bool BobbinOn;
 extern int     Menuflipspeed;
 extern int     DetailLevel;
 extern int     fandc;
+extern bool    advancedlighting;
+extern bool    advancedcoloredlights;
+extern bool    advancedlightflicker;
+extern bool    advanceddarkambient;
 extern int     blanktime;
 extern char    CodeName[9];
 #ifdef DOS
