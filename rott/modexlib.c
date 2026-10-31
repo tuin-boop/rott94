@@ -987,7 +987,11 @@ void AdvancedRendererDrawWorld(const word *tiles,const byte *specialOrientation,
 	skyTexture=AdvancedSkyTexture(skyPixels,skyRevision);
 	if (skyTexture)
 	{
-		const float radius=24.0f,lo=-18.0f,hi=18.0f;
+		/* A level view should expose roughly the same central half of ROTT's
+		   400-row panorama as the classic 200-row viewport.  The old short
+		   cylinder squeezed the entire panorama into one screen and exposed its
+		   artificial zenith cap even while looking almost straight ahead. */
+		const float radius=24.0f,lo=-40.0f,hi=40.0f;
 		const int slices=64;
 		int slice;
 		glDisable(GL_DEPTH_TEST);
