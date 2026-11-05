@@ -3059,7 +3059,9 @@ void      ThreeDRefresh (void)
          int probeYaw=ParseNum(_argv[probeParm+3]);
          int probePitch=ParseNum(_argv[probeParm+4]);
          if (probeX>0 && probeX<MAPSIZE-1 &&
-             probeY>0 && probeY<MAPSIZE-1)
+             probeY>0 && probeY<MAPSIZE-1 &&
+             (MAPSPOT(probeX,probeY,0)-AREATILE)>0 &&
+             (MAPSPOT(probeX,probeY,0)-AREATILE)<=NUMAREAS)
             {
             player->x=(probeX<<TILESHIFT)+(TILEGLOBAL/2);
             player->y=(probeY<<TILESHIFT)+(TILEGLOBAL/2);
@@ -3130,6 +3132,7 @@ void      ThreeDRefresh (void)
       if (!advancedMapDumped && CheckParm("advancedmapdump"))
          {
          FILE *mapFile=fopen("advanced-map.csv","w");
+         FILE *areaFile=fopen("advanced-areas.csv","w");
          if (mapFile)
             {
             fprintf(mapFile,"map,%d,levelheight,%d,start,%d,%d\n",
@@ -3142,6 +3145,19 @@ void      ThreeDRefresh (void)
                fputc('\n',mapFile);
                }
             fclose(mapFile);
+            }
+         if (areaFile)
+            {
+            fprintf(areaFile,"map,%d,levelheight,%d,start,%d,%d\n",
+               gamestate.mapon,levelheight,player->tilex,player->tiley);
+            for (y=0;y<MAPSIZE;y++)
+               {
+               for (x=0;x<MAPSIZE;x++)
+                  fprintf(areaFile,"%d%s",
+                     MAPSPOT(x,y,0)-AREATILE,x==MAPSIZE-1 ? "" : ",");
+               fputc('\n',areaFile);
+               }
+            fclose(areaFile);
             }
          advancedMapDumped=true;
          }
