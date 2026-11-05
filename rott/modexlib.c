@@ -656,9 +656,9 @@ static GLuint AdvancedPatchTexture(int lump,bool transparentPatch,
 {
 	byte *shape,*column;
 	patch_t *patch;
-	uint32_t *rgba;
+	uint32_t *rgba,*tintRgba=NULL;
 	SDL_Palette *palette;
-	int slot,x,y,width,height;
+	int slot,tintSlot=-1,x,y,width,height;
 	int cacheKey=transparentPatch ? (lump|0x40000000) : lump;
 
 	if (lump<0) return 0;
@@ -695,6 +695,16 @@ static GLuint AdvancedPatchTexture(int lump,bool transparentPatch,
 	rgba=(uint32_t *)calloc((size_t)width*(size_t)height,
 		sizeof(uint32_t));
 	if (!rgba) return 0;
+	if (transparentPatch)
+	{
+		tintRgba=(uint32_t *)calloc((size_t)width*(size_t)height,
+			sizeof(uint32_t));
+		if (!tintRgba)
+		{
+			free(rgba);
+			return 0;
+		}
+	}
 	palette=sdl_surface->format->palette;
 	for (x=0;x<width;x++)
 	{
@@ -707,6 +717,22 @@ static GLuint AdvancedPatchTexture(int lump,bool transparentPatch,
 			length=*column++;
 			if (*column==254)
 			{
+				/* Transpatch marker 254 is not an empty run.  The software
+				   scaler maps the already-drawn destination through a shade
+				   table.  Store a black alpha mask for a separate late pass,
+				   preserving actors behind the pane and opaque-bar depth. */
+				if (tintRgba)
+				{
+					int shade=(((transpatch_t *)shape)->translevel+72)>>2;
+					byte alpha;
+					if (shade<0) shade=0;
+					if (shade>31) shade=31;
+					/* Palette shade ramps preserve more midtone detail than a
+					   linear fade to black; cap the approximation at 50% opacity. */
+					alpha=(byte)((shade*128)/31);
+					for (y=0;y<length && offset+y<height;y++)
+						tintRgba[(offset+y)*width+x]=((uint32_t)alpha<<24);
+				}
 				column++;
 				offset=*column++;
 				continue;
@@ -746,12 +772,79 @@ static GLuint AdvancedPatchTexture(int lump,bool transparentPatch,
 	glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA,width,height,0,
 		GL_BGRA,GL_UNSIGNED_BYTE,rgba);
 	free(rgba);
+	if (tintRgba)
+	{
+		for (tintSlot=0;tintSlot<512;tintSlot++)
+			if (!advancedPatchTextures[tintSlot].texture) break;
+		if (tintSlot<512)
+		{
+			advancedPatchTextures[tintSlot]=advancedPatchTextures[slot];
+			advancedPatchTextures[tintSlot].lump=lump|0x20000000;
+			advancedPatchTextures[tintSlot].texture=0;
+			glGenTextures(1,&advancedPatchTextures[tintSlot].texture);
+			glBindTexture(GL_TEXTURE_2D,advancedPatchTextures[tintSlot].texture);
+			glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_NEAREST);
+			glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_NEAREST);
+			glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP);
+			glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_CLAMP);
+			glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA,width,height,0,
+				GL_BGRA,GL_UNSIGNED_BYTE,tintRgba);
+		}
+		free(tintRgba);
+	}
 	if (outWidth) *outWidth=width;
 	if (outHeight) *outHeight=height;
 	if (outOrigSize) *outOrigSize=advancedPatchTextures[slot].origsize;
 	if (outLeftOffset) *outLeftOffset=advancedPatchTextures[slot].leftoffset;
 	if (outTopOffset) *outTopOffset=advancedPatchTextures[slot].topoffset;
 	return advancedPatchTextures[slot].texture;
+}
+
+static GLuint AdvancedTransPatchTintTexture(int lump)
+{
+	int slot;
+	int cacheKey=lump|0x20000000;
+	for (slot=0;slot<512;slot++)
+		if (advancedPatchTextures[slot].texture &&
+			advancedPatchTextures[slot].lump==cacheKey)
+			return advancedPatchTextures[slot].texture;
+	/* Loading the opaque portion also creates its destination-shade mask. */
+	AdvancedPatchTexture(lump,true,NULL,NULL,NULL,NULL,NULL);
+	for (slot=0;slot<512;slot++)
+		if (advancedPatchTextures[slot].texture &&
+			advancedPatchTextures[slot].lump==cacheKey)
+			return advancedPatchTextures[slot].texture;
+	return 0;
+}
+
+static void AdvancedTransPatchTintFaceLayer(int lump,float x0,float z0,
+	float x1,float z1,float layer,int anchorTopOffset)
+{
+	int height;
+	float y0,y1;
+	GLuint texture;
+	if (!AdvancedPatchTexture(lump,true,NULL,&height,NULL,NULL,NULL))
+		return;
+	texture=AdvancedTransPatchTintTexture(lump);
+	if (!texture) return;
+	y1=layer+1.0f+(float)anchorTopOffset/64.0f;
+	y0=y1-(float)height/64.0f;
+	glEnable(GL_TEXTURE_2D);
+	glEnable(GL_ALPHA_TEST);
+	glAlphaFunc(GL_GREATER,0.01f);
+	glEnable(GL_BLEND);
+	glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
+	glDepthMask(GL_FALSE);
+	glBindTexture(GL_TEXTURE_2D,texture);
+	glBegin(GL_QUADS);
+	glTexCoord2f(0,1); glVertex3f(x0,y0,z0);
+	glTexCoord2f(1,1); glVertex3f(x1,y0,z1);
+	glTexCoord2f(1,0); glVertex3f(x1,y1,z1);
+	glTexCoord2f(0,0); glVertex3f(x0,y1,z0);
+	glEnd();
+	glDepthMask(GL_TRUE);
+	glDisable(GL_BLEND);
+	glDisable(GL_ALPHA_TEST);
 }
 
 static void AdvancedPatchFaceRange(int lump,bool transparentPatch,
@@ -1579,6 +1672,47 @@ void AdvancedRendererDrawWorld(const word *tiles,const byte *specialOrientation,
 			AdvancedWallTop(movingWallTexture[x],x0,z0,x1,z1,
 				(float)worldHeight);
 		}
+	/* A transpatch's marker-254 runs shade the destination instead of drawing
+	   source pixels.  Composite that mask after actors and moving walls so the
+	   pane affects everything behind it without letting its opaque frame lose
+	   the depth written by the earlier base pass. */
+	if (specialOrientation && specialPatches)
+		for (x=minx;x<=maxx;x++)
+			for (y=miny;y<=maxy;y++)
+			{
+				int cell=x*mapsize+y;
+				int bottom=specialPatches[cell*3];
+				int middle=specialPatches[cell*3+1];
+				int topPatch=specialPatches[cell*3+2];
+				int anchorTopOffset=0,unused;
+				float x0=(float)x,x1=x0+1.0f;
+				float z0=(float)-y,z1=z0-1.0f;
+				float ax0,az0,ax1,az1;
+				if (!AdvancedTileVisible(visibleTiles,mapsize,x,y) ||
+					(tiles[cell]&0xc000)!=0xc000 || !specialOrientation[cell] ||
+					bottom<0)
+					continue;
+				if (middle>=0)
+					AdvancedPatchTexture(middle,false,NULL,NULL,NULL,&unused,
+						&anchorTopOffset);
+				if (topPatch>=0)
+					AdvancedPatchTexture(topPatch,false,NULL,NULL,NULL,&unused,
+						&anchorTopOffset);
+				AdvancedPatchTexture(bottom,true,NULL,NULL,NULL,&unused,
+					&anchorTopOffset);
+				if (specialOrientation[cell]==1)
+				{
+					ax0=ax1=x0+.5f; az0=z0; az1=z1;
+				}
+				else
+				{
+					ax0=x0; ax1=x1; az0=az1=z0-.5f;
+				}
+				AdvancedSetTileLight(lightLevels,mapsize,x,y,
+					lightingEnabled,darkAmbient,coloredLights);
+				AdvancedTransPatchTintFaceLayer(bottom,ax0,az0,ax1,az1,0,
+					anchorTopOffset);
+			}
 	/* First-person artwork is screen-space UI and must be the final world
 	   layer so depth-tested walls and sprites can never overwrite it. */
 	AdvancedFlashlightOverlay(drawableWidth,drawableHeight);
