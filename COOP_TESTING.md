@@ -85,6 +85,26 @@ collision, shared keys, exits, and both co-op death rules. Only the
 focused game window receives keyboard input, so it is not a substitute for two
 PCs when checking simultaneous movement.
 
+## Advanced renderer regression test
+
+After building the Win32 game, run the repeatable Area 1 visual and gameplay
+smoke test from the repository root:
+
+```powershell
+.\tools\test-advanced-renderer.ps1
+```
+
+The test captures 13 matched classic/advanced views covering all four compass
+directions, steep vertical look, indoor and outdoor spaces, doors, masked
+walls, actors, and the late corridor. It then plays both shipped deterministic
+demos through the advanced renderer. When ImageMagick is installed, the paired
+captures are combined into `renderer-regression-montage.png` beside the Release
+executable for visual review.
+
+Use `-Configuration Debug` to repeat the same suite with the Debug executable.
+The harness automatically uses the registered Release data directory when the
+Debug output has no commercial `assets` folder of its own.
+
 ## Current prototype limits
 
 - Windows, direct-IP, and two players only.
