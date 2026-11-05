@@ -54,6 +54,18 @@ function Stop-TestProcess([Diagnostics.Process]$Process) {
     }
 }
 
+function Assert-CaptureBitmap([string]$Path) {
+    $bytes = [IO.File]::ReadAllBytes($Path)
+    if ($bytes.Length -lt 54 -or $bytes[0] -ne 0x42 -or $bytes[1] -ne 0x4d) {
+        throw "Renderer capture is not a valid BMP: $Path"
+    }
+    $width = [BitConverter]::ToInt32($bytes, 18)
+    $height = [math]::Abs([BitConverter]::ToInt32($bytes, 22))
+    if ($width -lt 320 -or $height -lt 200) {
+        throw "Renderer capture has an invalid size ${width}x${height}: $Path"
+    }
+}
+
 function Invoke-RendererCapture(
     [string]$Renderer,
     [object[]]$Probe,
@@ -99,8 +111,10 @@ function Invoke-RendererCapture(
     if ($OutputTag) {
         $taggedCapture = Join-Path $runtimeDir "$prefix-$OutputTag.bmp"
         Copy-Item -LiteralPath $capture -Destination $taggedCapture -Force
+        Assert-CaptureBitmap $taggedCapture
         return $taggedCapture
     }
+    Assert-CaptureBitmap $capture
     return $capture
 }
 
@@ -134,16 +148,39 @@ foreach ($probe in $probes) {
     $captures.Add((Invoke-RendererCapture 'advanced' $probe))
 }
 
-# Exercise a real Area 1 door in its closed, half-open, and fully-open states.
+# Exercise real Area 1 doors in their closed, half-open, and fully-open states.
 # The engine-side probe drives DoorOpening so area connectivity and visibility
 # are identical to live gameplay, rather than changing only the artwork frame.
 $doorStates = @(0, 32768, 65535)
-foreach ($doorState in $doorStates) {
-    $doorArguments = @('-advanceddoorprobe', '23', '72', "$doorState")
-    $captures.Add((Invoke-RendererCapture 'classic' @(22, 72, 0, 0) `
-        $doorArguments "door-23-72-$doorState"))
-    $captures.Add((Invoke-RendererCapture 'advanced' @(22, 72, 0, 0) `
-        $doorArguments "door-23-72-$doorState"))
+$doorProbes = @(
+    # Vertical door plane at the Area 1 entrance.
+    [pscustomobject]@{ X = 23; Y = 72; Camera = @(22, 72, 0, 0) },
+    # Horizontal three-door bank with different artwork deeper in Area 1.
+    [pscustomobject]@{ X = 42; Y = 28; Camera = @(42, 30, 90, 0) }
+)
+foreach ($doorProbe in $doorProbes) {
+    $doorHashes = @{ classic = @(); advanced = @() }
+    foreach ($doorState in $doorStates) {
+        $doorTag = "door-$($doorProbe.X)-$($doorProbe.Y)-$doorState"
+        $doorArguments = @('-advanceddoorprobe', "$($doorProbe.X)",
+            "$($doorProbe.Y)", "$doorState")
+        $classicDoorCapture = Invoke-RendererCapture 'classic' `
+            $doorProbe.Camera $doorArguments $doorTag
+        $advancedDoorCapture = Invoke-RendererCapture 'advanced' `
+            $doorProbe.Camera $doorArguments $doorTag
+        $captures.Add($classicDoorCapture)
+        $captures.Add($advancedDoorCapture)
+        $doorHashes.classic += (Get-FileHash -LiteralPath $classicDoorCapture `
+            -Algorithm SHA256).Hash
+        $doorHashes.advanced += (Get-FileHash -LiteralPath $advancedDoorCapture `
+            -Algorithm SHA256).Hash
+    }
+    foreach ($renderer in 'classic', 'advanced') {
+        if (($doorHashes[$renderer] | Select-Object -Unique).Count -ne `
+            $doorStates.Count) {
+            throw "$renderer door states did not all render differently at $($doorProbe.X),$($doorProbe.Y)"
+        }
+    }
 }
 
 # The flashlight is an advanced-renderer feature, so verify that enabling it
@@ -182,13 +219,16 @@ if (-not $SkipMontage) {
             if ($LASTEXITCODE -ne 0) { throw "ImageMagick failed while making $row" }
             $rowFiles.Add($row)
         }
-        foreach ($doorState in $doorStates) {
-            $classic = Join-Path $runtimeDir "classic-door-23-72-$doorState.bmp"
-            $advanced = Join-Path $runtimeDir "advanced-door-23-72-$doorState.bmp"
-            $row = Join-Path $runtimeDir "renderer-test-door-$doorState.png"
-            & $magick.Source $classic -resize '480x270!' $advanced -resize '480x270!' +append $row
-            if ($LASTEXITCODE -ne 0) { throw "ImageMagick failed while making $row" }
-            $rowFiles.Add($row)
+        foreach ($doorProbe in $doorProbes) {
+            foreach ($doorState in $doorStates) {
+                $doorTag = "door-$($doorProbe.X)-$($doorProbe.Y)-$doorState"
+                $classic = Join-Path $runtimeDir "classic-$doorTag.bmp"
+                $advanced = Join-Path $runtimeDir "advanced-$doorTag.bmp"
+                $row = Join-Path $runtimeDir "renderer-test-$doorTag.png"
+                & $magick.Source $classic -resize '480x270!' $advanced -resize '480x270!' +append $row
+                if ($LASTEXITCODE -ne 0) { throw "ImageMagick failed while making $row" }
+                $rowFiles.Add($row)
+            }
         }
         $montage = Join-Path $runtimeDir 'renderer-regression-montage.png'
         & $magick.Source @rowFiles -append $montage
@@ -200,7 +240,7 @@ $result = [pscustomobject]@{
     Configuration = $Configuration
     RuntimeDirectory = $runtimeDir
     ProbePairs = $probes.Count
-    DoorStatePairs = $doorStates.Count
+    DoorStatePairs = $doorStates.Count * $doorProbes.Count
     FlashlightCaptures = 2
     Captures = $captures.Count
     DemoResults = $demoResults
