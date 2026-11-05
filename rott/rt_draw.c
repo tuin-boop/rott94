@@ -318,7 +318,7 @@ extern int AdvancedRendererSkyStartRow(void);
 
 extern void AdvancedRendererDrawWorld(const word *tiles,
    const byte *specialOrientation,const word *specialTexture,
-   const signed short *specialAltTexture,
+   const signed short *specialAltTexture,const signed short *specialSideTexture,
    const signed short *specialPatches,const byte *visibleTiles,
    const word *wallTextures,
    const signed short *wallAltTextures,
@@ -3192,6 +3192,10 @@ void      ThreeDRefresh (void)
             player->tilex=probeX;
             player->tiley=probeY;
             player->angle=(probeYaw*FINEANGLES/360)&(FINEANGLES-1);
+            /* Player control reconstructs angle from this fixed-point owner
+               every simulation tick.  Keep deterministic classic and GPU
+               probes on the requested heading beyond their first frame. */
+            locplayerstate->anglefrac=player->angle<<ANGLEBITS;
             {
             extern void SetModernProbePitch(int pitch);
             /* Command-line probes use conventional camera degrees (positive
@@ -3236,6 +3240,7 @@ void      ThreeDRefresh (void)
       static byte specialOrientation[MAPSIZE*MAPSIZE];
       static word specialTexture[MAPSIZE*MAPSIZE];
       static signed short specialAltTexture[MAPSIZE*MAPSIZE];
+      static signed short specialSideTexture[MAPSIZE*MAPSIZE];
       static signed short specialPatches[MAPSIZE*MAPSIZE*3];
       static word gpuWallTexture[MAPSIZE*MAPSIZE];
       static signed short gpuWallAlt[MAPSIZE*MAPSIZE];
@@ -3423,6 +3428,7 @@ void      ThreeDRefresh (void)
       memset(specialOrientation,0,sizeof(specialOrientation));
       memset(specialTexture,0,sizeof(specialTexture));
       for (x=0;x<MAPSIZE*MAPSIZE;x++) specialAltTexture[x]=-2;
+      for (x=0;x<MAPSIZE*MAPSIZE;x++) specialSideTexture[x]=-1;
       for (x=0;x<MAPSIZE*MAPSIZE*3;x++) specialPatches[x]=-1;
       for (x=0;x<MAPSIZE*MAPSIZE;x++) gpuWallAlt[x]=-2;
       for (x=0;x<MAPSIZE;x++)
@@ -3441,6 +3447,7 @@ void      ThreeDRefresh (void)
                specialOrientation[x*MAPSIZE+y]=doorobjlist[index]->vertical ? 1 : 2;
                specialTexture[x*MAPSIZE+y]=doorobjlist[index]->texture;
                specialAltTexture[x*MAPSIZE+y]=doorobjlist[index]->alttexture;
+               specialSideTexture[x*MAPSIZE+y]=doorobjlist[index]->sidepic;
                /* A fully closed door uses the same raw 64x64 column format as
                   a wall.  Opening frames are patch-format artwork. */
                if (doorobjlist[index]->texture==doorobjlist[index]->basetexture)
@@ -3453,6 +3460,7 @@ void      ThreeDRefresh (void)
                specialPatches[cell*3]=maskobjlist[index]->bottomtexture;
                specialPatches[cell*3+1]=maskobjlist[index]->midtexture;
                specialPatches[cell*3+2]=maskobjlist[index]->toptexture;
+               specialSideTexture[cell]=maskobjlist[index]->sidepic;
                }
             }
 
@@ -3556,7 +3564,8 @@ void      ThreeDRefresh (void)
       if (SHOW_PLAYER_STATS())
          DrawStats();
       AdvancedRendererDrawWorld(&tilemap[0][0],specialOrientation,
-         specialTexture,specialAltTexture,specialPatches,&spotvis[0][0],
+         specialTexture,specialAltTexture,specialSideTexture,specialPatches,
+         &spotvis[0][0],
          gpuWallTexture,gpuWallAlt,
          MAPSIZE,levelheight,
          gpuPlayerX,gpuPlayerY,gpuCameraHeight,

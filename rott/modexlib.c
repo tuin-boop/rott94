@@ -806,17 +806,17 @@ static void AdvancedApplyLight(float level,int lightingEnabled,
 		glColor3f(1,1,1);
 		return;
 	}
-	/* The classic shade table's advanced-dark ambience lands near its darkest
-	   usable ramps when no local flame reaches a tile.  A 30% floor made sealed
-	   rooms visibly grey; keep the unlit floor low and let the existing torch
-	   field restore the courtyard's intended brightness. */
-	base=darkAmbient ? .25f : .72f;
+	/* Keep dark ambience readable on modern displays.  The earlier 25% floor
+	   crushed wall detail in Area 1's door rooms and was darker than the
+	   software shade table it replaces; local flames still provide the larger
+	   contrast step above this deliberately modest ambient level. */
+	base=darkAmbient ? .42f : .80f;
 	red=base+level*.105f;
 	if (red>1.0f) red=1.0f;
 	if (coloredLights && level>0)
 	{
-		green=base+(red-base)*.72f;
-		blue=base+(red-base)*.38f;
+		green=base+(red-base)*.86f;
+		blue=base+(red-base)*.68f;
 	}
 	else
 		green=blue=red;
@@ -1130,7 +1130,8 @@ bool AdvancedRendererActive(void)
 
 void AdvancedRendererDrawWorld(const word *tiles,const byte *specialOrientation,
 	const word *specialTexture,const signed short *specialAltTexture,
-	const signed short *specialPatches,const byte *visibleTiles,
+	const signed short *specialSideTexture,const signed short *specialPatches,
+	const byte *visibleTiles,
 	const word *wallTextures,
 	const signed short *wallAltTextures,
 	int mapsize,int worldHeight,float playerx,float playery,float cameraHeight,
@@ -1506,30 +1507,55 @@ void AdvancedRendererDrawWorld(const word *tiles,const byte *specialOrientation,
 				float z0=(float)-y,z1=z0-1.0f;
 				int wallCell=(x-1)*mapsize+y;
 				word wall=tiles[wallCell];
+				int faceTexture;
 				AdvancedSetTileLight(lightLevels,mapsize,x,y,
 					lightingEnabled,darkAmbient,coloredLights);
 				if (wall && !(wall&0x8000))
-					AdvancedMappedWallFace(wallTextures ? wallTextures[wallCell] : wall,
+				{
+					faceTexture=(wallTextures ? wallTextures[wallCell] : wall);
+					if ((wall&0x4000) && specialSideTexture &&
+						specialSideTexture[x*mapsize+y]>=0)
+						faceTexture=specialSideTexture[x*mapsize+y];
+					AdvancedMappedWallFace(faceTexture,
 						wallAltTextures ? wallAltTextures[wallCell] : -2,
 						(float)worldHeight,x0,z1,x0,z0);
+				}
 				wallCell=(x+1)*mapsize+y;
 				wall=tiles[wallCell];
 				if (wall && !(wall&0x8000))
-					AdvancedMappedWallFace(wallTextures ? wallTextures[wallCell] : wall,
+				{
+					faceTexture=(wallTextures ? wallTextures[wallCell] : wall);
+					if ((wall&0x4000) && specialSideTexture &&
+						specialSideTexture[x*mapsize+y]>=0)
+						faceTexture=specialSideTexture[x*mapsize+y];
+					AdvancedMappedWallFace(faceTexture,
 						wallAltTextures ? wallAltTextures[wallCell] : -2,
 						(float)worldHeight,x1,z0,x1,z1);
+				}
 				wallCell=x*mapsize+y-1;
 				wall=tiles[wallCell];
 				if (wall && !(wall&0x8000))
-					AdvancedMappedWallFace(wallTextures ? wallTextures[wallCell] : wall,
+				{
+					faceTexture=(wallTextures ? wallTextures[wallCell] : wall);
+					if ((wall&0x4000) && specialSideTexture &&
+						specialSideTexture[x*mapsize+y]>=0)
+						faceTexture=specialSideTexture[x*mapsize+y];
+					AdvancedMappedWallFace(faceTexture,
 						wallAltTextures ? wallAltTextures[wallCell] : -2,
 						(float)worldHeight,x0,z0,x1,z0);
+				}
 				wallCell=x*mapsize+y+1;
 				wall=tiles[wallCell];
 				if (wall && !(wall&0x8000))
-					AdvancedMappedWallFace(wallTextures ? wallTextures[wallCell] : wall,
+				{
+					faceTexture=(wallTextures ? wallTextures[wallCell] : wall);
+					if ((wall&0x4000) && specialSideTexture &&
+						specialSideTexture[x*mapsize+y]>=0)
+						faceTexture=specialSideTexture[x*mapsize+y];
+					AdvancedMappedWallFace(faceTexture,
 						wallAltTextures ? wallAltTextures[wallCell] : -2,
 						(float)worldHeight,x1,z1,x0,z1);
+				}
 			}
 	/* Pushwalls move continuously between grid cells, so tilemap alone cannot
 	   describe their visible position while in motion. */
