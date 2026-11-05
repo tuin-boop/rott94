@@ -160,6 +160,22 @@ void UpdateDemoPlayback (int time);
 int GetTypeSize (int type);
 int MaxSpeedForCharacter(playertype *pstate);
 
+/* The original .DMO files store commands in a compact 12-byte layout.
+   DemoType grows to 16 bytes with Win32 structure alignment, so using
+   sizeof(DemoType) to walk the file skips four bytes after every command.
+   Describe the on-disk format explicitly so playback is host-independent. */
+#pragma pack(push,1)
+typedef struct DemoDiskType
+{
+   int   time;
+   short momx;
+   short momy;
+   word  dangle;
+   word  buttons;
+} DemoDiskType;
+#pragma pack(pop)
+typedef char DemoDiskTypeMustBe12Bytes[(sizeof(DemoDiskType)==12) ? 1 : -1];
+
 /*
 =============================================================================
 
@@ -3429,7 +3445,7 @@ void CheckForDemoDone ( void )
 
 void CheckForDemoOverflowed ( void )
 {
-	if (demoptr >= (lastdemoptr-sizeof(DemoType)))
+	if (demoptr >= (lastdemoptr-sizeof(DemoDiskType)))
       {
       playstate = ex_completed;     // demo is done
       EndDemo();
@@ -3444,17 +3460,17 @@ void CheckForDemoOverflowed ( void )
 
 void RecordDemoCmd (void)
 {
-   DemoType * dtime;
+   DemoDiskType * dtime;
 
    SoftError("Demo command recorded at %d\n",controlupdatetime);
-   dtime=(DemoType *)demoptr;
+   dtime=(DemoDiskType *)demoptr;
    dtime->time = controlupdatetime;
    dtime->momx = (controlbuf[0]>>1);
    dtime->momy = (controlbuf[1]>>1);
    dtime->dangle = controlbuf[2]>>11;
-   dtime->buttons = buttonbits;
+   dtime->buttons = (word)buttonbits;
 
-   demoptr+=sizeof(DemoType);
+	 demoptr+=sizeof(DemoDiskType);
 
    CheckForDemoOverflowed();
 }
@@ -3467,7 +3483,7 @@ void RecordDemoCmd (void)
 
 void AddDemoCmd (void)
 {
-   DemoType * dtime;
+   DemoDiskType * dtime;
 
    //
    // get info from demo buffer
@@ -3476,12 +3492,12 @@ void AddDemoCmd (void)
    SoftError("Demo command played at %d\n",controlupdatetime);
    if (demoplayback==true)
       {
-      dtime=(DemoType *)demoptr;
+      dtime=(DemoDiskType *)demoptr;
       controlbuf[0]=dtime->momx<<1;
       controlbuf[1]=dtime->momy<<1;
       controlbuf[2]=dtime->dangle<<11;
       buttonbits   =dtime->buttons;
-      demoptr+=sizeof(DemoType);
+		demoptr+=sizeof(DemoDiskType);
 		}
 }
 
@@ -3493,10 +3509,10 @@ void AddDemoCmd (void)
 
 int GetNextDemoTime (void)
 {
-   DemoType * dtime;
+   DemoDiskType * dtime;
 
    CheckForDemoDone();
-   dtime=(DemoType *)demoptr;
+   dtime=(DemoDiskType *)demoptr;
    if (demoplayback)
       return dtime->time;
    else

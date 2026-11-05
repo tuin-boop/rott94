@@ -3283,6 +3283,24 @@ void      ThreeDRefresh (void)
             {
             int lump=gpuStat->shapenum+shapestart;
             if (gpuStat->flags&FL_ROTATING) lump+=StatRotate(gpuStat);
+            /* Disks and height-flippable columns use hand-drawn vertical
+               perspective frames in the classic scaler.  They are not
+               ordinary one-frame billboards: without this selection a disk
+               seen near eye level looks like a tilted flying saucer. */
+            if ((gpuStat->itemnumber!=(unsigned int)-1) &&
+                (gpuStat->flags&FL_HEIGHTFLIPPABLE))
+               {
+               if (gpuStat->itemnumber==stat_disk)
+                  {
+                  int value=nonbobpheight-gpuStat->z-32;
+                  if ((value<=HF_2) && (value>HF_1)) lump++;
+                  else if ((value<=HF_1) && (value>=-HF_1)) lump+=2;
+                  else if ((value<-HF_1) && (value>=-HF_2)) lump+=3;
+                  else if (value<-HF_2) lump+=4;
+                  }
+               else if ((nonbobpheight-gpuStat->z)<-16)
+                  lump++;
+               }
             gpuSpriteX[gpuSpriteCount]=(float)gpuStat->x/(float)TILEGLOBAL;
             gpuSpriteY[gpuSpriteCount]=(float)gpuStat->y/(float)TILEGLOBAL;
             gpuSpriteZ[gpuSpriteCount]=(float)(nominalheight-gpuStat->z)/64.0f;
@@ -3304,6 +3322,17 @@ void      ThreeDRefresh (void)
             int lump=gpuActor->shapenum+shapestart;
             if (gpuActor->state && gpuActor->state->rotate)
                lump+=CalcRotate(gpuActor);
+            if (gpuActor->obclass==diskobj)
+               {
+               int value=nonbobpheight-gpuActor->z-32;
+               if ((value<=HF_2) && (value>HF_1)) lump++;
+               else if ((value<=HF_1) && (value>=-HF_1)) lump+=2;
+               else if ((value<-HF_1) && (value>=-HF_2)) lump+=3;
+               else if (value<-HF_2) lump+=4;
+               }
+            else if ((gpuActor->obclass==pillarobj) &&
+                     ((nonbobpheight-gpuActor->z)<-16))
+               lump++;
             gpuSpriteX[gpuSpriteCount]=(float)gpuActor->x/(float)TILEGLOBAL;
             gpuSpriteY[gpuSpriteCount]=(float)gpuActor->y/(float)TILEGLOBAL;
             gpuSpriteZ[gpuSpriteCount]=(float)(nominalheight-gpuActor->z)/64.0f;
