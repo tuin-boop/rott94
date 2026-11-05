@@ -438,6 +438,10 @@ SDL_Surface *sdl_surface = NULL;
 static SDL_Surface *unstretch_sdl_surface = NULL;
 static SDL_Texture *sdl_hint_texture = NULL;
 static bool advancedGpuRenderer = false;
+static bool advancedFlashlight = false;
+static float advancedLightPlayerX;
+static float advancedLightPlayerY;
+static float advancedLightPlayerYaw;
 static SDL_GLContext advancedGlContext = NULL;
 static GLuint advancedGlTexture = 0;
 static uint32_t *advancedGlPixels = NULL;
@@ -454,9 +458,11 @@ static GLuint advancedWallTextures[1024];
 static GLuint advancedFloorTexture = 0;
 static GLuint advancedCeilingTexture = 0;
 static GLuint advancedSkyTexture = 0;
+static GLuint advancedFlashlightTexture = 0;
 static GLuint advancedHudTexture = 0;
 static uint32_t *advancedHudPixels = NULL;
 static int advancedHudWidth = 0;
+static int advancedHudHeight = 0;
 static const byte *advancedFloorSource = NULL;
 static const byte *advancedCeilingSource = NULL;
 static int advancedSkyTextureRevision = -1;
@@ -488,20 +494,25 @@ void AdvancedRendererPrepareHud(void)
 
 static void AdvancedHudOverlay(int drawableWidth,int drawableHeight)
 {
-	int x,y,band;
+	int x,y,topBand,bottomBand,band;
 	byte *source;
 	SDL_Palette *palette;
-	float top;
+	float top,topV;
 	if (!sdl_surface || !sdl_surface->pixels ||
 		!sdl_surface->format->palette) return;
-	band=iGLOBAL_SCREENHEIGHT<40 ? iGLOBAL_SCREENHEIGHT : 40;
-	if (!advancedHudPixels || advancedHudWidth!=iGLOBAL_SCREENWIDTH)
+	topBand=iGLOBAL_SCREENHEIGHT<16 ? iGLOBAL_SCREENHEIGHT : 16;
+	bottomBand=iGLOBAL_SCREENHEIGHT-topBand<40 ?
+		iGLOBAL_SCREENHEIGHT-topBand : 40;
+	band=topBand+bottomBand;
+	if (!advancedHudPixels || advancedHudWidth!=iGLOBAL_SCREENWIDTH ||
+		advancedHudHeight!=band)
 	{
 		free(advancedHudPixels);
 		advancedHudPixels=(uint32_t *)malloc((size_t)iGLOBAL_SCREENWIDTH*
 			(size_t)band*sizeof(uint32_t));
 		if (!advancedHudPixels) return;
 		advancedHudWidth=iGLOBAL_SCREENWIDTH;
+		advancedHudHeight=band;
 		if (advancedHudTexture) glDeleteTextures(1,&advancedHudTexture);
 		advancedHudTexture=0;
 	}
@@ -509,7 +520,8 @@ static void AdvancedHudOverlay(int drawableWidth,int drawableHeight)
 	for (y=0;y<band;y++)
 	{
 		source=(byte *)sdl_surface->pixels+
-			(iGLOBAL_SCREENHEIGHT-band+y)*sdl_surface->pitch;
+			(y<topBand ? y : iGLOBAL_SCREENHEIGHT-bottomBand+y-topBand)*
+			sdl_surface->pitch;
 		for (x=0;x<iGLOBAL_SCREENWIDTH;x++)
 		{
 			byte index=source[x];
@@ -539,14 +551,19 @@ static void AdvancedHudOverlay(int drawableWidth,int drawableHeight)
 		glTexSubImage2D(GL_TEXTURE_2D,0,0,0,iGLOBAL_SCREENWIDTH,band,
 			GL_BGRA,GL_UNSIGNED_BYTE,advancedHudPixels);
 	}
-	top=1.0f-(float)band/(float)iGLOBAL_SCREENHEIGHT;
+	top=1.0f-(float)bottomBand/(float)iGLOBAL_SCREENHEIGHT;
+	topV=(float)topBand/(float)band;
 	glEnable(GL_TEXTURE_2D);
 	glEnable(GL_ALPHA_TEST);
 	glAlphaFunc(GL_GREATER,0.05f);
 	glColor3f(1,1,1);
 	glBegin(GL_QUADS);
-	glTexCoord2f(0,0); glVertex2f(0,top);
-	glTexCoord2f(1,0); glVertex2f(1,top);
+	glTexCoord2f(0,0); glVertex2f(0,0);
+	glTexCoord2f(1,0); glVertex2f(1,0);
+	glTexCoord2f(1,topV); glVertex2f(1,(float)topBand/iGLOBAL_SCREENHEIGHT);
+	glTexCoord2f(0,topV); glVertex2f(0,(float)topBand/iGLOBAL_SCREENHEIGHT);
+	glTexCoord2f(0,topV); glVertex2f(0,top);
+	glTexCoord2f(1,topV); glVertex2f(1,top);
 	glTexCoord2f(1,1); glVertex2f(1,1);
 	glTexCoord2f(0,1); glVertex2f(0,1);
 	glEnd();
@@ -793,7 +810,7 @@ static void AdvancedApplyLight(float level,int lightingEnabled,
 	   usable ramps when no local flame reaches a tile.  A 30% floor made sealed
 	   rooms visibly grey; keep the unlit floor low and let the existing torch
 	   field restore the courtyard's intended brightness. */
-	base=darkAmbient ? .18f : .72f;
+	base=darkAmbient ? .25f : .72f;
 	red=base+level*.105f;
 	if (red>1.0f) red=1.0f;
 	if (coloredLights && level>0)
@@ -806,12 +823,31 @@ static void AdvancedApplyLight(float level,int lightingEnabled,
 	glColor3f(red,green,blue);
 }
 
+static float AdvancedFlashlightLevel(float x,float y)
+{
+	float dx=x-advancedLightPlayerX;
+	float dy=y-advancedLightPlayerY;
+	float distance=(float)sqrt(dx*dx+dy*dy);
+	float radians=advancedLightPlayerYaw*(float)(3.14159265358979323846/180.0);
+	float dot;
+
+	if (!advancedFlashlight || distance>12.0f)
+		return 0.0f;
+	if (distance<.75f)
+		return 7.0f;
+	dot=(dx*(float)cos(radians)-dy*(float)sin(radians))/distance;
+	if (dot<.55f)
+		return 0.0f;
+	return (7.0f*(1.0f-distance/12.0f))*((dot-.55f)/.45f);
+}
+
 static void AdvancedSetTileLight(const byte *lightLevels,int mapsize,
 	int x,int y,int lightingEnabled,int darkAmbient,int coloredLights)
 {
 	float level=0;
 	if (lightLevels && x>=0 && y>=0 && x<mapsize && y<mapsize)
 		level=(float)lightLevels[x*mapsize+y];
+	level+=AdvancedFlashlightLevel((float)x+.5f,(float)y+.5f);
 	AdvancedApplyLight(level,lightingEnabled,darkAmbient,coloredLights);
 }
 
@@ -829,7 +865,14 @@ static void AdvancedSetCornerLight(const byte *lightLevels,int mapsize,
 					count++;
 				}
 	if (count) level/=(float)count;
+	level+=AdvancedFlashlightLevel((float)x,(float)y);
 	AdvancedApplyLight(level,lightingEnabled,darkAmbient,coloredLights);
+}
+
+bool AdvancedRendererToggleFlashlight(void)
+{
+	advancedFlashlight=!advancedFlashlight;
+	return advancedFlashlight;
 }
 
 static bool AdvancedTileVisible(const byte *visibleTiles,int mapsize,int x,int y)
@@ -883,6 +926,35 @@ static void AdvancedBillboard(int lump,float x,float y,float z,float yaw)
 	glDisable(GL_ALPHA_TEST);
 }
 
+static void AdvancedFloorSprite(int lump,float x,float y,float z)
+{
+	int width,height,origsize,sizeShift;
+	GLuint texture=AdvancedPatchTexture(lump,false,&width,&height,
+		&origsize,NULL,NULL);
+	float pixelScale,halfWidth,halfDepth;
+	if (!texture) return;
+	sizeShift=origsize>>7;
+	if (sizeShift<0) sizeShift=0;
+	if (sizeShift>4) sizeShift=4;
+	pixelScale=1.0f/(64.0f*(float)(1<<sizeShift));
+	halfWidth=(float)width*pixelScale*.5f;
+	halfDepth=(float)height*pixelScale*.5f;
+	glEnable(GL_TEXTURE_2D);
+	glEnable(GL_ALPHA_TEST);
+	glAlphaFunc(GL_GREATER,0.05f);
+	glEnable(GL_BLEND);
+	glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
+	glBindTexture(GL_TEXTURE_2D,texture);
+	glBegin(GL_QUADS);
+	glTexCoord2f(0,0); glVertex3f(x-halfWidth,z+.006f,y-halfDepth);
+	glTexCoord2f(1,0); glVertex3f(x+halfWidth,z+.006f,y-halfDepth);
+	glTexCoord2f(1,1); glVertex3f(x+halfWidth,z+.006f,y+halfDepth);
+	glTexCoord2f(0,1); glVertex3f(x-halfWidth,z+.006f,y+halfDepth);
+	glEnd();
+	glDisable(GL_BLEND);
+	glDisable(GL_ALPHA_TEST);
+}
+
 static void AdvancedScreenPatch(int lump,float centerX,int yOffset,
 	int drawableWidth,int drawableHeight)
 {
@@ -906,6 +978,69 @@ static void AdvancedScreenPatch(int lump,float centerX,int yOffset,
 	glTexCoord2f(0,1); glVertex2f(centerX-w*.5f,bottom);
 	glEnd();
 	glDisable(GL_ALPHA_TEST);
+}
+
+static void AdvancedFlashlightOverlay(int drawableWidth,int drawableHeight)
+{
+	byte pixels[128*128*4];
+	int x,y;
+	if (!advancedFlashlight) return;
+	if (!advancedFlashlightTexture)
+	{
+		for (y=0;y<128;y++)
+			for (x=0;x<128;x++)
+			{
+				float nx=((float)x-63.5f)/63.5f;
+				float ny=((float)y-61.0f)/61.0f;
+				/* A compact oval pool reads as a carried flashlight rather than a
+				   global brightness toggle.  The world-space cone below supplies
+				   distance falloff; this overlay softens the coarse tile edges. */
+				float radius=(float)sqrt(nx*nx*2.8f+ny*ny*2.2f);
+				float strength=(1.0f-radius)/.72f;
+				int offset=(y*128+x)*4;
+				if (strength<0) strength=0;
+				if (strength>1) strength=1;
+				strength=strength*strength*(3.0f-2.0f*strength);
+				pixels[offset]=(byte)(strength*178.0f);
+				pixels[offset+1]=(byte)(strength*164.0f);
+				pixels[offset+2]=(byte)(strength*132.0f);
+				pixels[offset+3]=255;
+			}
+		glGenTextures(1,&advancedFlashlightTexture);
+		glBindTexture(GL_TEXTURE_2D,advancedFlashlightTexture);
+		glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR);
+		glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);
+		glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP);
+		glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_CLAMP);
+		glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA,128,128,0,GL_RGBA,
+			GL_UNSIGNED_BYTE,pixels);
+	}
+	glDisable(GL_DEPTH_TEST);
+	glEnable(GL_TEXTURE_2D);
+	glEnable(GL_BLEND);
+	glBlendFunc(GL_DST_COLOR,GL_ONE);
+	glBindTexture(GL_TEXTURE_2D,advancedFlashlightTexture);
+	glColor4f(1,1,1,1);
+	glMatrixMode(GL_PROJECTION);
+	glPushMatrix();
+	glLoadIdentity();
+	glOrtho(0,1,1,0,-1,1);
+	glMatrixMode(GL_MODELVIEW);
+	glPushMatrix();
+	glLoadIdentity();
+	glBegin(GL_QUADS);
+	glTexCoord2f(0,0); glVertex2f(0,0);
+	glTexCoord2f(1,0); glVertex2f(1,0);
+	glTexCoord2f(1,1); glVertex2f(1,1);
+	glTexCoord2f(0,1); glVertex2f(0,1);
+	glEnd();
+	glPopMatrix();
+	glMatrixMode(GL_PROJECTION);
+	glPopMatrix();
+	glMatrixMode(GL_MODELVIEW);
+	glDisable(GL_BLEND);
+	glDisable(GL_TEXTURE_2D);
+	glEnable(GL_DEPTH_TEST);
 }
 
 static GLuint AdvancedPlaneTexture(const byte *source,GLuint *texture,
@@ -1005,7 +1140,7 @@ void AdvancedRendererDrawWorld(const word *tiles,const byte *specialOrientation,
 	const signed short *skyPixelAngles,int skyViewWidth,int skyFineAngle,
 	int spriteCount,
 	const float *spriteX,const float *spriteY,const float *spriteZ,
-	const int *spriteLump,int weaponMain,int weaponAlt,
+	const int *spriteLump,const byte *spriteMode,int weaponMain,int weaponAlt,
 	int weaponXOffset,int weaponYOffset,const byte *lightLevels,
 	int lightingEnabled,int darkAmbient,int coloredLights,int movingWallCount,
 	const float *movingWallX,const float *movingWallY,
@@ -1018,6 +1153,9 @@ void AdvancedRendererDrawWorld(const word *tiles,const byte *specialOrientation,
 
 	if (!advancedGpuRenderer || !advancedGlContext || !tiles)
 		return;
+	advancedLightPlayerX=playerx;
+	advancedLightPlayerY=playery;
+	advancedLightPlayerYaw=yaw;
 
 	SDL_GL_GetDrawableSize(sdl_window,&drawableWidth,&drawableHeight);
 	if (drawableHeight<1) drawableHeight=1;
@@ -1334,8 +1472,12 @@ void AdvancedRendererDrawWorld(const word *tiles,const byte *specialOrientation,
 		{
 			AdvancedSetTileLight(lightLevels,mapsize,(int)spriteX[x],
 				(int)spriteY[x],lightingEnabled,darkAmbient,coloredLights);
-			AdvancedBillboard(spriteLump[x],spriteX[x],-spriteY[x],
-				spriteZ[x],yaw);
+			if (spriteMode && spriteMode[x]==1)
+				AdvancedFloorSprite(spriteLump[x],spriteX[x],-spriteY[x],
+					spriteZ[x]);
+			else
+				AdvancedBillboard(spriteLump[x],spriteX[x],-spriteY[x],
+					spriteZ[x],yaw);
 		}
 	/* Free look exposes surfaces that the original fixed-horizon renderer
 	   could never see.  Close the tops of solid wall columns so outdoor
@@ -1413,6 +1555,7 @@ void AdvancedRendererDrawWorld(const word *tiles,const byte *specialOrientation,
 		}
 	/* First-person artwork is screen-space UI and must be the final world
 	   layer so depth-tested walls and sprites can never overwrite it. */
+	AdvancedFlashlightOverlay(drawableWidth,drawableHeight);
 	if (weaponMain>=0)
 	{
 		glDisable(GL_DEPTH_TEST);
@@ -1480,6 +1623,7 @@ void GraphicsMode ( void )
     Uint32 flags = 0;
     Uint32 rendererFlags = SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC;
 	advancedGpuRenderer=(CheckParm("advancedrenderer")!=0);
+	advancedFlashlight=(CheckParm("flashlight")!=0);
 	advancedCaptureRequested=(CheckParm("advancedcapture")!=0);
 	advancedCaptureSequence=(CheckParm("advancedcapturesequence")!=0);
 	classicCaptureRequested=(CheckParm("classiccapture")!=0);

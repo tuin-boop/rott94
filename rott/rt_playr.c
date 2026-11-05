@@ -986,11 +986,21 @@ void PlayerMissileAttack(objtype*ob)
    {
    playertype * pstate;
    missile_stats *newmissiledata;
+   int savedyzangle=-1;
    M_LINKSTATE(ob,pstate);
 
 
    MISCVARS->madenoise = true;
    newmissiledata = &PlayerMissileData[pstate->missileweapon];
+
+   if (AdvancedRendererActive() && usemouselook &&
+       ob==PLAYER[consoleplayer])
+      {
+      int signedpitch=(ob->yzangle>ANG180) ?
+         ob->yzangle-FINEANGLES : ob->yzangle;
+      savedyzangle=ob->yzangle;
+      ob->yzangle=(-signedpitch)&(FINEANGLES-1);
+      }
 
    // ready to annihilate this poor bastard
 
@@ -1046,6 +1056,9 @@ void PlayerMissileAttack(objtype*ob)
       ob->momentumx = -FixedMul(0x5000l,costable[ob->angle]);
       ob->momentumy = FixedMul(0x5000l,sintable[ob->angle]);
       }
+
+   if (savedyzangle>=0)
+      ob->yzangle=savedyzangle;
 
    }
 
@@ -1480,6 +1493,7 @@ void  GunAttack (objtype *ob)
 {
 	playertype * pstate;
 	int      damage;
+	int      savedyzangle=-1;
 
 	M_LINKSTATE(ob,pstate);
 
@@ -1504,7 +1518,17 @@ void  GunAttack (objtype *ob)
 	}
 
    AutoTargetHorizon(ob);
+   if (AdvancedRendererActive() && usemouselook &&
+       ob==PLAYER[consoleplayer])
+      {
+      int signedpitch=(ob->yzangle>ANG180) ?
+         ob->yzangle-FINEANGLES : ob->yzangle;
+      savedyzangle=ob->yzangle;
+      ob->yzangle=(-signedpitch)&(FINEANGLES-1);
+      }
    RayShoot (ob, damage, (characters[pstate->player].accuracy+gamestate.difficulty)<<3);
+   if (savedyzangle>=0)
+      ob->yzangle=savedyzangle;
 
 }
 

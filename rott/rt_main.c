@@ -87,6 +87,8 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "fx_man.h"
 //MED
 #include "memcheck.h"
+extern bool AdvancedRendererActive(void);
+extern bool AdvancedRendererToggleFlashlight(void);
 volatile int    oldtime;
 volatile int    gametime;
 
@@ -2139,6 +2141,8 @@ void PlayLoop
    volatile int atime;
 
    bool canquit = true;
+   bool simulatedThisFrame;
+   static bool flashlightKeyDown = false;
    int     quittime = 0;
 
    wami(3);
@@ -2210,6 +2214,7 @@ fromloadedgame:
 
 	while( playstate == ex_stillplaying )
       {
+      simulatedThisFrame = false;
       UpdateClientControls();
 
       if ( GamePaused )
@@ -2235,7 +2240,10 @@ fromloadedgame:
             Keep the deterministic simulation/network clock unchanged, but
             allow presentation frames between simulation tics. */
          if ((controlupdatestarted == 1) && (GetTicCount() != oldtime))
+            {
             UpdateGameObjects();
+            simulatedThisFrame = true;
+            }
 
          atime = GetFastTics();
 
@@ -2251,11 +2259,25 @@ fromloadedgame:
 
       PollKeyboard();
 
+      if (AdvancedRendererActive() && !MSG.messageon)
+         {
+         if (Keyboard[sc_F] && !flashlightKeyDown)
+            AddMessage(AdvancedRendererToggleFlashlight() ?
+               "Flashlight on" : "Flashlight off",MSG_GAME);
+         flashlightKeyDown=Keyboard[sc_F];
+         }
+
       MISCVARS->madenoise = false;
 
-      AnimateWalls();
+      /* Presentation can run at the monitor refresh rate, but these routines
+         advance gameplay/animation state.  Running them once per displayed
+         frame made flames, coins, lifts and players accelerate on 144 Hz
+         displays.  Keep them on the same fixed clock as actors and doors. */
+      if (simulatedThisFrame || !AdvancedRendererActive())
+         {
+         AnimateWalls();
 
-      UpdateClientControls();
+         UpdateClientControls();
 
       #if (DEVELOPMENT == 1)
          Z_CheckHeap();
@@ -2268,10 +2290,11 @@ fromloadedgame:
 
       UpdateClientControls();
 
-      DoSprites();
-      DoAnimatedMaskedWalls();
+         DoSprites();
+         DoAnimatedMaskedWalls();
 
-      UpdatePlayers();
+         UpdatePlayers();
+         }
 
       DrawTime( false );
 

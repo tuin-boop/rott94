@@ -65,6 +65,9 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "rt_sc_a.h"
 //MED
 #include "memcheck.h"
+#ifndef DOS
+#include "SDL.h"
+#endif
 
 
 extern void VH_UpdateScreen (void);
@@ -101,6 +104,97 @@ unsigned long * lights;
  * separate from the map's packed light data avoids changing simulation state
  * or consuming gameplay random numbers in network games. */
 static byte dynamicTorchLight[MAPSIZE][MAPSIZE];
+
+#ifndef DOS
+#define ADVANCED_INTERPOLATION_SLOTS (MAXVISIBLE*2+MAXPWALLS)
+typedef struct
+   {
+   const void *key;
+   float previousX,previousY,previousZ;
+   float currentX,currentY,currentZ;
+   Uint64 changedAt;
+   } advanced_interpolation_t;
+
+static advanced_interpolation_t advancedInterpolation[ADVANCED_INTERPOLATION_SLOTS];
+static Uint64 advancedInterpolationNow;
+static Uint64 advancedInterpolationFrequency;
+static int advancedInterpolationMap=-1;
+
+static float AdvancedInterpolationAlpha(Uint64 changedAt)
+{
+   double alpha;
+   if (!advancedInterpolationFrequency || !changedAt)
+      return 1.0f;
+   alpha=(double)(advancedInterpolationNow-changedAt)*(double)VBLCOUNTER/
+      (double)advancedInterpolationFrequency;
+   if (alpha<0.0) alpha=0.0;
+   if (alpha>1.0) alpha=1.0;
+   return (float)alpha;
+}
+
+static void AdvancedBeginInterpolationFrame(int map)
+{
+   advancedInterpolationNow=SDL_GetPerformanceCounter();
+   advancedInterpolationFrequency=SDL_GetPerformanceFrequency();
+   if (advancedInterpolationMap!=map)
+      {
+      memset(advancedInterpolation,0,sizeof(advancedInterpolation));
+      advancedInterpolationMap=map;
+      }
+}
+
+static void AdvancedInterpolatePosition(const void *key,float rawX,float rawY,
+   float rawZ,float *x,float *y,float *z)
+{
+   advanced_interpolation_t *entry=NULL;
+   int i;
+   for (i=0;i<ADVANCED_INTERPOLATION_SLOTS;i++)
+      if (advancedInterpolation[i].key==key)
+         { entry=&advancedInterpolation[i]; break; }
+      else if (!entry && !advancedInterpolation[i].key)
+         entry=&advancedInterpolation[i];
+   if (!entry) entry=&advancedInterpolation[0];
+   if (entry->key!=key)
+      {
+      entry->key=key;
+      entry->previousX=entry->currentX=rawX;
+      entry->previousY=entry->currentY=rawY;
+      entry->previousZ=entry->currentZ=rawZ;
+      entry->changedAt=advancedInterpolationNow;
+      }
+   else if (entry->currentX!=rawX || entry->currentY!=rawY ||
+            entry->currentZ!=rawZ)
+      {
+      float alpha=AdvancedInterpolationAlpha(entry->changedAt);
+      float dx=rawX-entry->currentX,dy=rawY-entry->currentY;
+      if (dx*dx+dy*dy>16.0f)
+         {
+         entry->previousX=entry->currentX=rawX;
+         entry->previousY=entry->currentY=rawY;
+         entry->previousZ=entry->currentZ=rawZ;
+         }
+      else
+         {
+         entry->previousX=entry->previousX+
+            (entry->currentX-entry->previousX)*alpha;
+         entry->previousY=entry->previousY+
+            (entry->currentY-entry->previousY)*alpha;
+         entry->previousZ=entry->previousZ+
+            (entry->currentZ-entry->previousZ)*alpha;
+         entry->currentX=rawX;
+         entry->currentY=rawY;
+         entry->currentZ=rawZ;
+         }
+      entry->changedAt=advancedInterpolationNow;
+      }
+   {
+   float alpha=AdvancedInterpolationAlpha(entry->changedAt);
+   *x=entry->previousX+(entry->currentX-entry->previousX)*alpha;
+   *y=entry->previousY+(entry->currentY-entry->previousY)*alpha;
+   *z=entry->previousZ+(entry->currentZ-entry->previousZ)*alpha;
+   }
+}
+#endif
 
 int         wstart;
 
@@ -234,7 +328,7 @@ extern void AdvancedRendererDrawWorld(const word *tiles,
    const signed short *skyPixelAngles,int skyViewWidth,int skyFineAngle,
    int spriteCount,
    const float *spriteX,const float *spriteY,const float *spriteZ,
-   const int *spriteLump,int weaponMain,int weaponAlt,
+   const int *spriteLump,const byte *spriteMode,int weaponMain,int weaponAlt,
    int weaponXOffset,int weaponYOffset,const byte *lightLevels,
    int lightingEnabled,int darkAmbient,int coloredLights,int movingWallCount,
    const float *movingWallX,const float *movingWallY,
@@ -426,9 +520,39 @@ static void BuildDynamicTorchLights (void)
    /* Fire jets are actors rather than static decorations.  Sampling their
     * current state makes the light extend and retract with the visible flame. */
    for (actor=FIRSTACTOR;actor;actor=actor->next)
+      {
       if (actor->obclass==firejetobj)
          AddDynamicFlameLight(actor->x>>16,actor->y>>16,
                               FirejetLightIntensity(actor));
+      else
+         {
+         switch (actor->obclass)
+            {
+            case wallfireobj:
+            case fireballobj:
+            case dmfballobj:
+            case p_firebombobj:
+            case p_firewallobj:
+            case p_godballobj:
+               intensity=9;
+               break;
+            case missileobj:
+            case dm_heatseekobj:
+            case p_bazookaobj:
+            case p_heatseekobj:
+            case p_drunkmissileobj:
+            case p_splitmissileobj:
+            case p_kesobj:
+               intensity=7;
+               break;
+            default:
+               intensity=0;
+               break;
+            }
+         if (intensity)
+            AddDynamicFlameLight(actor->x>>16,actor->y>>16,intensity);
+         }
+      }
 }
 
 int GetDynamicTorchLight (int tilex, int tiley)
@@ -3118,8 +3242,12 @@ void      ThreeDRefresh (void)
       static float gpuSpriteX[MAXVISIBLE],gpuSpriteY[MAXVISIBLE];
       static float gpuSpriteZ[MAXVISIBLE];
       static int gpuSpriteLump[MAXVISIBLE];
+      static byte gpuSpriteMode[MAXVISIBLE];
       static float gpuMovingWallX[MAXPWALLS],gpuMovingWallY[MAXPWALLS];
       static int gpuMovingWallTexture[MAXPWALLS];
+      static float previousYaw,currentYaw,previousPitch,currentPitch;
+      static Uint64 yawChangedAt,pitchChangedAt;
+      static int yawInterpolationMap=-1;
       int gpuSpriteCount=0;
       int gpuMovingWallCount=0;
       int gpuWeaponMain,gpuWeaponAlt,gpuWeaponX,gpuWeaponY;
@@ -3128,6 +3256,7 @@ void      ThreeDRefresh (void)
       int x,y;
       int signedpitch;
       float yaw,pitch,gpuCameraHeight;
+      float gpuPlayerX,gpuPlayerY,gpuPlayerUnused;
 
       if (!advancedMapDumped && CheckParm("advancedmapdump"))
          {
@@ -3248,6 +3377,48 @@ void      ThreeDRefresh (void)
          measured up from the floor.  Convert across the full level column,
          rather than treating the character's eye offset as floor height. */
       gpuCameraHeight=((float)(levelheight*64-pheight))/64.0f;
+#ifndef DOS
+      AdvancedBeginInterpolationFrame(gamestate.mapon);
+      AdvancedInterpolatePosition(player,
+         (float)player->x/(float)TILEGLOBAL,
+         (float)player->y/(float)TILEGLOBAL,gpuCameraHeight,
+         &gpuPlayerX,&gpuPlayerY,&gpuCameraHeight);
+      if (yawInterpolationMap!=gamestate.mapon)
+         {
+         previousYaw=currentYaw=yaw;
+         previousPitch=currentPitch=pitch;
+         yawChangedAt=advancedInterpolationNow;
+         pitchChangedAt=advancedInterpolationNow;
+         yawInterpolationMap=gamestate.mapon;
+         }
+      else
+         {
+         float delta=yaw-currentYaw;
+         while (delta>180.0f) delta-=360.0f;
+         while (delta<-180.0f) delta+=360.0f;
+         if (delta!=0.0f)
+            {
+            float alpha=AdvancedInterpolationAlpha(yawChangedAt);
+            previousYaw=previousYaw+(currentYaw-previousYaw)*alpha;
+            currentYaw+=delta;
+            yawChangedAt=advancedInterpolationNow;
+            }
+         }
+      yaw=previousYaw+(currentYaw-previousYaw)*
+         AdvancedInterpolationAlpha(yawChangedAt);
+      if (pitch!=currentPitch)
+         {
+         float alpha=AdvancedInterpolationAlpha(pitchChangedAt);
+         previousPitch=previousPitch+(currentPitch-previousPitch)*alpha;
+         currentPitch=pitch;
+         pitchChangedAt=advancedInterpolationNow;
+         }
+      pitch=previousPitch+(currentPitch-previousPitch)*
+         AdvancedInterpolationAlpha(pitchChangedAt);
+#else
+      gpuPlayerX=(float)player->x/(float)TILEGLOBAL;
+      gpuPlayerY=(float)player->y/(float)TILEGLOBAL;
+#endif
       BuildDynamicTorchLights();
       memset(specialOrientation,0,sizeof(specialOrientation));
       memset(specialTexture,0,sizeof(specialTexture));
@@ -3317,10 +3488,17 @@ void      ThreeDRefresh (void)
                else if ((nonbobpheight-gpuStat->z)<-16)
                   lump++;
                }
-            gpuSpriteX[gpuSpriteCount]=(float)gpuStat->x/(float)TILEGLOBAL;
-            gpuSpriteY[gpuSpriteCount]=(float)gpuStat->y/(float)TILEGLOBAL;
-            gpuSpriteZ[gpuSpriteCount]=(float)(nominalheight-gpuStat->z)/64.0f;
-            gpuSpriteLump[gpuSpriteCount++]=lump;
+            AdvancedInterpolatePosition(gpuStat,
+               (float)gpuStat->x/(float)TILEGLOBAL,
+               (float)gpuStat->y/(float)TILEGLOBAL,
+               (float)(nominalheight-gpuStat->z)/64.0f,
+               &gpuSpriteX[gpuSpriteCount],&gpuSpriteY[gpuSpriteCount],
+               &gpuSpriteZ[gpuSpriteCount]);
+            gpuSpriteLump[gpuSpriteCount]=lump;
+            gpuSpriteMode[gpuSpriteCount]=
+               (gpuStat->itemnumber>=stat_touch1 &&
+                gpuStat->itemnumber<=stat_touch4) ? 1 : 0;
+            gpuSpriteCount++;
             }
       for (gpuActor=firstactive;gpuActor && gpuSpriteCount<MAXVISIBLE;
            gpuActor=gpuActor->nextactive)
@@ -3349,20 +3527,26 @@ void      ThreeDRefresh (void)
             else if ((gpuActor->obclass==pillarobj) &&
                      ((nonbobpheight-gpuActor->z)<-16))
                lump++;
-            gpuSpriteX[gpuSpriteCount]=(float)gpuActor->x/(float)TILEGLOBAL;
-            gpuSpriteY[gpuSpriteCount]=(float)gpuActor->y/(float)TILEGLOBAL;
-            gpuSpriteZ[gpuSpriteCount]=(float)(nominalheight-gpuActor->z)/64.0f;
-            gpuSpriteLump[gpuSpriteCount++]=lump;
+            AdvancedInterpolatePosition(gpuActor,
+               (float)gpuActor->x/(float)TILEGLOBAL,
+               (float)gpuActor->y/(float)TILEGLOBAL,
+               (float)(nominalheight-gpuActor->z)/64.0f,
+               &gpuSpriteX[gpuSpriteCount],&gpuSpriteY[gpuSpriteCount],
+               &gpuSpriteZ[gpuSpriteCount]);
+            gpuSpriteLump[gpuSpriteCount]=lump;
+            gpuSpriteMode[gpuSpriteCount]=0;
+            gpuSpriteCount++;
             }
       for (x=0;x<pwallnum && gpuMovingWallCount<MAXPWALLS;x++)
          if (pwallobjlist[x] &&
              (pwallobjlist[x]->action==pw_pushing ||
               pwallobjlist[x]->action==pw_moving))
             {
-            gpuMovingWallX[gpuMovingWallCount]=
-               (float)pwallobjlist[x]->x/(float)TILEGLOBAL;
-            gpuMovingWallY[gpuMovingWallCount]=
-               (float)pwallobjlist[x]->y/(float)TILEGLOBAL;
+            AdvancedInterpolatePosition(pwallobjlist[x],
+               (float)pwallobjlist[x]->x/(float)TILEGLOBAL,
+               (float)pwallobjlist[x]->y/(float)TILEGLOBAL,0,
+               &gpuMovingWallX[gpuMovingWallCount],
+               &gpuMovingWallY[gpuMovingWallCount],&gpuPlayerUnused);
             gpuMovingWallTexture[gpuMovingWallCount++]=
                pwallobjlist[x]->texture;
             }
@@ -3375,13 +3559,14 @@ void      ThreeDRefresh (void)
          specialTexture,specialAltTexture,specialPatches,&spotvis[0][0],
          gpuWallTexture,gpuWallAlt,
          MAPSIZE,levelheight,
-         (float)player->x/(float)TILEGLOBAL,
-         (float)player->y/(float)TILEGLOBAL,gpuCameraHeight,
+         gpuPlayerX,gpuPlayerY,gpuCameraHeight,
          yaw,pitch,
          AdvancedRendererFloorPixels(),AdvancedRendererCeilingPixels(),
          AdvancedRendererSkyPixels(),AdvancedRendererSkyRevision(),
-         AdvancedRendererSkyStartRow(),pixelangle,viewwidth,viewangle,
+         AdvancedRendererSkyStartRow(),pixelangle,viewwidth,
+         ((int)(yaw*(float)FINEANGLES/360.0f))&(FINEANGLES-1),
          gpuSpriteCount,gpuSpriteX,gpuSpriteY,gpuSpriteZ,gpuSpriteLump,
+         gpuSpriteMode,
          gpuWeaponMain,gpuWeaponAlt,gpuWeaponX,gpuWeaponY,
          &dynamicTorchLight[0][0],advancedlighting,advanceddarkambient,
          advancedcoloredlights,gpuMovingWallCount,gpuMovingWallX,
