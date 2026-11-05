@@ -145,13 +145,17 @@ foreach ($doorState in $doorStates) {
 }
 
 # The flashlight is an advanced-renderer feature, so verify that enabling it
-# materially changes the same deterministic entrance view.
-$unlitEntrance = Join-Path $runtimeDir 'advanced-probe-4-67-0-0.bmp'
-$unlitEntranceHash = (Get-FileHash -LiteralPath $unlitEntrance -Algorithm SHA256).Hash
-$flashlightCapture = Invoke-RendererCapture 'advanced' @(4, 67, 0, 0) `
+# materially changes the same deterministic view in Area 1's darker door room.
+$flashlightProbe = @(18, 73, 90, 0)
+$unlitFlashlightCapture = Invoke-RendererCapture 'advanced' $flashlightProbe `
+    @() 'flashlight-off'
+$captures.Add($unlitFlashlightCapture)
+$unlitFlashlightHash = (Get-FileHash -LiteralPath $unlitFlashlightCapture `
+    -Algorithm SHA256).Hash
+$flashlightCapture = Invoke-RendererCapture 'advanced' $flashlightProbe `
     @('-flashlight') 'flashlight-on'
 $captures.Add($flashlightCapture)
-if ($unlitEntranceHash -eq (Get-FileHash -LiteralPath $flashlightCapture `
+if ($unlitFlashlightHash -eq (Get-FileHash -LiteralPath $flashlightCapture `
     -Algorithm SHA256).Hash) {
     throw 'The advanced flashlight capture was identical to the unlit view'
 }
@@ -195,7 +199,7 @@ $result = [pscustomobject]@{
     RuntimeDirectory = $runtimeDir
     ProbePairs = $probes.Count
     DoorStatePairs = $doorStates.Count
-    FlashlightCaptures = 1
+    FlashlightCaptures = 2
     Captures = $captures.Count
     DemoResults = $demoResults
     Montage = $montage
