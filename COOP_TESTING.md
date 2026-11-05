@@ -94,15 +94,17 @@ smoke test from the repository root:
 .\tools\test-advanced-renderer.ps1
 ```
 
-The test captures 15 matched classic/advanced views covering all four compass
+The test captures 20 matched classic/advanced views covering all four compass
 directions, steep vertical look, indoor and outdoor spaces, masked walls,
-actors, and the late corridor. It also compares both Area 1 door orientations
+actors, pickups, a pressure plate, a spring, a fire jet, and the late corridor.
+It also compares both Area 1 door orientations
 while closed, half-open, and fully open: the vertical entrance door at
 `(23,72)` and the horizontal three-door bank at `(42,28)`. This covers distinct
 door planes and artwork, as well as area connectivity. The suite verifies that
-the advanced flashlight changes the rendered frame and plays both shipped
-deterministic demos through the advanced renderer. When ImageMagick is
-installed, the paired captures are combined into
+an Area 1 elevator disk renders distinctly at the ceiling, midpoint, and floor.
+It also verifies that the advanced flashlight changes the rendered frame and
+plays both shipped deterministic demos through the advanced renderer. When
+ImageMagick is installed, the paired captures are combined into
 `renderer-regression-montage.png` beside the Release executable for visual
 review.
 

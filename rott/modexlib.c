@@ -980,7 +980,8 @@ static bool AdvancedTileVisible(const byte *visibleTiles,int mapsize,int x,int y
 	return false;
 }
 
-static void AdvancedBillboard(int lump,float x,float y,float z,float yaw)
+static void AdvancedBillboard(int lump,float x,float y,float z,float yaw,
+	bool classicVerticalAnchor)
 {
 	int width,height,origsize,leftoffset,topoffset,sizeShift;
 	GLuint texture=AdvancedPatchTexture(lump,false,&width,&height,
@@ -1004,8 +1005,24 @@ static void AdvancedBillboard(int lump,float x,float y,float z,float yaw)
 	/* World z is the sprite's physical base.  Patch topoffset is metadata for
 	   the classic screen-space scaler; using it as a world-space anchor puts
 	   many floor decorations (notably Area 1 torches) below the floor. */
-	bottom=z;
-	top=z+(float)height*pixelScale;
+	if (classicVerticalAnchor)
+	{
+		/* Height-flippable disks use five perspective drawings whose grab
+		   offsets place the platform around its physical z plane.  Respect
+		   that metadata for disks only; ordinary decoration deliberately uses
+		   floor anchoring because several original patches have misleading
+		   offsets that put torches below the floor. */
+		/* Classic ScaleShape adds topoffset to the object's height term.
+		   OpenGL world Y points upward, so the equivalent world-space top is
+		   the physical plane plus that signed grab offset. */
+		top=z+(float)topoffset*pixelScale;
+		bottom=top-(float)height*pixelScale;
+	}
+	else
+	{
+		bottom=z;
+		top=z+(float)height*pixelScale;
+	}
 	glEnable(GL_TEXTURE_2D);
 	glEnable(GL_ALPHA_TEST);
 	glAlphaFunc(GL_GREATER,0.05f);
@@ -1571,7 +1588,7 @@ void AdvancedRendererDrawWorld(const word *tiles,const byte *specialOrientation,
 					spriteZ[x]);
 			else
 				AdvancedBillboard(spriteLump[x],spriteX[x],-spriteY[x],
-					spriteZ[x],yaw);
+					spriteZ[x],yaw,spriteMode && spriteMode[x]==2);
 		}
 	/* Free look exposes surfaces that the original fixed-horizon renderer
 	   could never see.  Close the tops of solid wall columns so outdoor

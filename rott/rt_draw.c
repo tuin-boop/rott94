@@ -3182,15 +3182,26 @@ void      ThreeDRefresh (void)
          int probeY=ParseNum(_argv[probeParm+2]);
          int probeYaw=ParseNum(_argv[probeParm+3]);
          int probePitch=ParseNum(_argv[probeParm+4]);
+         int probeArea=-1;
+         if (probeX>0 && probeX<MAPSIZE-1 &&
+             probeY>0 && probeY<MAPSIZE-1)
+            probeArea=MAPSPOT(probeX,probeY,0)-AREATILE;
          if (probeX>0 && probeX<MAPSIZE-1 &&
              probeY>0 && probeY<MAPSIZE-1 &&
-             (MAPSPOT(probeX,probeY,0)-AREATILE)>0 &&
-             (MAPSPOT(probeX,probeY,0)-AREATILE)<=NUMAREAS)
+             probeArea>=0 && probeArea<NUMAREAS)
             {
             player->x=(probeX<<TILESHIFT)+(TILEGLOBAL/2);
             player->y=(probeY<<TILESHIFT)+(TILEGLOBAL/2);
             player->tilex=probeX;
             player->tiley=probeY;
+            /* Teleport the complete simulation state, not only the camera.
+               Classic visibility activates actors, statics and masked walls
+               through areabyplayer; leaving the spawn area here made remote
+               probe rooms compare an inactive classic scene with a populated
+               GPU scene. */
+            player->areanumber=probeArea;
+            ConnectAreas();
+            UpdateLightLevel(probeArea);
             player->angle=(probeYaw*FINEANGLES/360)&(FINEANGLES-1);
             /* Player control reconstructs angle from this fixed-point owner
                every simulation tick.  Keep deterministic classic and GPU
@@ -3237,6 +3248,34 @@ void      ThreeDRefresh (void)
                   }
                break;
                }
+         }
+      }
+      {
+      int diskProbeParm=CheckParm("advanceddiskprobe");
+      if (diskProbeParm && diskProbeParm+3<_argc)
+         {
+         int diskX=ParseNum(_argv[diskProbeParm+1]);
+         int diskY=ParseNum(_argv[diskProbeParm+2]);
+         int diskZ=ParseNum(_argv[diskProbeParm+3]);
+         objtype *disk;
+         objtype *targetDisk=NULL;
+         if (diskZ<0) diskZ=0;
+         if (diskZ>nominalheight) diskZ=nominalheight;
+         for (disk=FIRSTACTOR;disk;disk=disk->next)
+            if (disk->obclass==diskobj)
+               {
+               if (disk->tilex==diskX && disk->tiley==diskY)
+                  targetDisk=disk;
+               else
+                  disk->shapenum=NOTHING;
+               }
+         if (targetDisk)
+            {
+            targetDisk->z=diskZ;
+            targetDisk->momentumz=0;
+            targetDisk->drawx=targetDisk->x;
+            targetDisk->drawy=targetDisk->y;
+            }
          }
       }
       renderProbeConfigured=true;
@@ -3312,6 +3351,7 @@ void      ThreeDRefresh (void)
          if (objectFile)
             {
             FILE *doorFile=fopen("advanced-doors.csv","w");
+            FILE *maskedFile=fopen("advanced-masked-walls.csv","w");
             statobj_t *dumpStat;
             objtype *dumpActor;
             fprintf(objectFile,"kind,x,y,z,tilex,tiley,shape,item_or_class,flags,active\n");
@@ -3351,6 +3391,21 @@ void      ThreeDRefresh (void)
                         doorPatch->origsize,doorPatch->leftoffset,
                         doorPatch->topoffset,doorobjlist[x]->vertical);
                   }
+            if (maskedFile)
+               {
+               fprintf(maskedFile,
+                  "index,x,y,vertical,flags,bottom,middle,top,side,area,visible\n");
+               for (x=0;x<maskednum;x++)
+                  if (maskobjlist[x])
+                     fprintf(maskedFile,"%d,%d,%d,%d,%u,%d,%d,%d,%d,%d,%d\n",
+                        x,maskobjlist[x]->tilex,maskobjlist[x]->tiley,
+                        maskobjlist[x]->vertical,(unsigned)maskobjlist[x]->flags,
+                        maskobjlist[x]->bottomtexture,
+                        maskobjlist[x]->midtexture,maskobjlist[x]->toptexture,
+                        maskobjlist[x]->sidepic,maskobjlist[x]->areanumber,
+                        spotvis[maskobjlist[x]->tilex][maskobjlist[x]->tiley]!=0);
+               fclose(maskedFile);
+               }
             if (doorFile) fclose(doorFile);
             fclose(objectFile);
             }
@@ -3515,7 +3570,8 @@ void      ThreeDRefresh (void)
             gpuSpriteLump[gpuSpriteCount]=lump;
             gpuSpriteMode[gpuSpriteCount]=
                (gpuStat->itemnumber>=stat_touch1 &&
-                gpuStat->itemnumber<=stat_touch4) ? 1 : 0;
+                gpuStat->itemnumber<=stat_touch4) ? 1 :
+               (gpuStat->itemnumber==stat_disk ? 2 : 0);
             gpuSpriteCount++;
             }
       for (gpuActor=firstactive;gpuActor && gpuSpriteCount<MAXVISIBLE;
@@ -3552,7 +3608,8 @@ void      ThreeDRefresh (void)
                &gpuSpriteX[gpuSpriteCount],&gpuSpriteY[gpuSpriteCount],
                &gpuSpriteZ[gpuSpriteCount]);
             gpuSpriteLump[gpuSpriteCount]=lump;
-            gpuSpriteMode[gpuSpriteCount]=0;
+            gpuSpriteMode[gpuSpriteCount]=
+               gpuActor->obclass==diskobj ? 2 : 0;
             gpuSpriteCount++;
             }
       for (x=0;x<pwallnum && gpuMovingWallCount<MAXPWALLS;x++)

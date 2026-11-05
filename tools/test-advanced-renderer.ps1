@@ -40,6 +40,13 @@ $probes = @(
     @(11, 67, 0, -89),
     @(18, 67, 0, 0),
     @(18, 72, 0, 0),
+    # Floor plate, pickup, spring, and actor scale/placement coverage.
+    @(20, 74, 0, 45),
+    @(10, 67, 0, 10),
+    @(31, 72, 0, 0),
+    @(16, 72, 0, 0),
+    # Fire-jet corridor from an adjacent diagonal tile.
+    @(79, 75, 45, 20),
     @(27, 71, 0, 0),
     @(34, 72, 0, 0),
     @(42, 82, 0, 0),
@@ -183,6 +190,32 @@ foreach ($doorProbe in $doorProbes) {
     }
 }
 
+# Elevator disks use five perspective frames and travel through the full level
+# height.  Pin one real Area 1 disk at the ceiling, midpoint, and floor so a
+# future coordinate/sign regression cannot bury it or make it jump in size.
+$diskStates = @(0, 64, 128)
+$diskHashes = @{ classic = @(); advanced = @() }
+foreach ($diskState in $diskStates) {
+    $diskTag = "disk-38-70-$diskState"
+    $diskArguments = @('-advanceddiskprobe', '38', '70', "$diskState")
+    $classicDiskCapture = Invoke-RendererCapture 'classic' @(38, 68, 270, 5) `
+        $diskArguments $diskTag
+    $advancedDiskCapture = Invoke-RendererCapture 'advanced' @(38, 68, 270, 5) `
+        $diskArguments $diskTag
+    $captures.Add($classicDiskCapture)
+    $captures.Add($advancedDiskCapture)
+    $diskHashes.classic += (Get-FileHash -LiteralPath $classicDiskCapture `
+        -Algorithm SHA256).Hash
+    $diskHashes.advanced += (Get-FileHash -LiteralPath $advancedDiskCapture `
+        -Algorithm SHA256).Hash
+}
+foreach ($renderer in 'classic', 'advanced') {
+    if (($diskHashes[$renderer] | Select-Object -Unique).Count -ne `
+        $diskStates.Count) {
+        throw "$renderer elevator disk states did not all render differently"
+    }
+}
+
 # The flashlight is an advanced-renderer feature, so verify that enabling it
 # materially changes the same deterministic view in Area 1's darker door room.
 $flashlightProbe = @(18, 73, 90, 0)
@@ -230,6 +263,15 @@ if (-not $SkipMontage) {
                 $rowFiles.Add($row)
             }
         }
+        foreach ($diskState in $diskStates) {
+            $diskTag = "disk-38-70-$diskState"
+            $classic = Join-Path $runtimeDir "classic-$diskTag.bmp"
+            $advanced = Join-Path $runtimeDir "advanced-$diskTag.bmp"
+            $row = Join-Path $runtimeDir "renderer-test-$diskTag.png"
+            & $magick.Source $classic -resize '480x270!' $advanced -resize '480x270!' +append $row
+            if ($LASTEXITCODE -ne 0) { throw "ImageMagick failed while making $row" }
+            $rowFiles.Add($row)
+        }
         $montage = Join-Path $runtimeDir 'renderer-regression-montage.png'
         & $magick.Source @rowFiles -append $montage
         if ($LASTEXITCODE -ne 0) { throw 'ImageMagick failed while making the renderer montage' }
@@ -241,6 +283,7 @@ $result = [pscustomobject]@{
     RuntimeDirectory = $runtimeDir
     ProbePairs = $probes.Count
     DoorStatePairs = $doorStates.Count * $doorProbes.Count
+    DiskStatePairs = $diskStates.Count
     FlashlightCaptures = 2
     Captures = $captures.Count
     DemoResults = $demoResults
