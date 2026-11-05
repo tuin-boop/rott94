@@ -95,11 +95,13 @@ smoke test from the repository root:
 ```
 
 The test captures 13 matched classic/advanced views covering all four compass
-directions, steep vertical look, indoor and outdoor spaces, doors, masked
-walls, actors, and the late corridor. It then plays both shipped deterministic
-demos through the advanced renderer. When ImageMagick is installed, the paired
-captures are combined into `renderer-regression-montage.png` beside the Release
-executable for visual review.
+directions, steep vertical look, indoor and outdoor spaces, masked walls,
+actors, and the late corridor. It also compares an Area 1 door while closed,
+half-open, and fully open, verifies that the advanced flashlight changes the
+rendered frame, and plays both shipped deterministic demos through the advanced
+renderer. When ImageMagick is installed, the paired captures are combined into
+`renderer-regression-montage.png` beside the Release executable for visual
+review.
 
 Use `-Configuration Debug` to repeat the same suite with the Debug executable.
 The harness automatically uses the registered Release data directory when the

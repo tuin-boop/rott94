@@ -52,7 +52,12 @@ function Stop-TestProcess([Diagnostics.Process]$Process) {
     }
 }
 
-function Invoke-RendererCapture([string]$Renderer, [object[]]$Probe) {
+function Invoke-RendererCapture(
+    [string]$Renderer,
+    [object[]]$Probe,
+    [string[]]$ExtraArguments = @(),
+    [string]$OutputTag = ''
+) {
     $x, $y, $yaw, $pitch = $Probe
     $prefix = if ($Renderer -eq 'advanced') { 'advanced' } else { 'classic' }
     $capture = Join-Path $runtimeDir "$prefix-probe-$x-$y-$yaw-$pitch.bmp"
@@ -68,6 +73,7 @@ function Invoke-RendererCapture([string]$Renderer, [object[]]$Probe) {
         $arguments += '-classiccapture'
     }
     $arguments += @('-advancedprobecamera', "$x", "$y", "$yaw", "$pitch")
+    $arguments += $ExtraArguments
     $process = Start-Process -FilePath $exe -WorkingDirectory $runtimeDir `
         -ArgumentList $arguments -WindowStyle Hidden -PassThru
     $deadline = (Get-Date).AddSeconds($CaptureTimeoutSeconds)
@@ -87,6 +93,11 @@ function Invoke-RendererCapture([string]$Renderer, [object[]]$Probe) {
         Start-Sleep -Milliseconds 700
     } finally {
         Stop-TestProcess $process
+    }
+    if ($OutputTag) {
+        $taggedCapture = Join-Path $runtimeDir "$prefix-$OutputTag.bmp"
+        Copy-Item -LiteralPath $capture -Destination $taggedCapture -Force
+        return $taggedCapture
     }
     return $capture
 }
@@ -121,6 +132,30 @@ foreach ($probe in $probes) {
     $captures.Add((Invoke-RendererCapture 'advanced' $probe))
 }
 
+# Exercise a real Area 1 door in its closed, half-open, and fully-open states.
+# The engine-side probe drives DoorOpening so area connectivity and visibility
+# are identical to live gameplay, rather than changing only the artwork frame.
+$doorStates = @(0, 32768, 65535)
+foreach ($doorState in $doorStates) {
+    $doorArguments = @('-advanceddoorprobe', '23', '72', "$doorState")
+    $captures.Add((Invoke-RendererCapture 'classic' @(22, 72, 0, 0) `
+        $doorArguments "door-23-72-$doorState"))
+    $captures.Add((Invoke-RendererCapture 'advanced' @(22, 72, 0, 0) `
+        $doorArguments "door-23-72-$doorState"))
+}
+
+# The flashlight is an advanced-renderer feature, so verify that enabling it
+# materially changes the same deterministic entrance view.
+$unlitEntrance = Join-Path $runtimeDir 'advanced-probe-4-67-0-0.bmp'
+$unlitEntranceHash = (Get-FileHash -LiteralPath $unlitEntrance -Algorithm SHA256).Hash
+$flashlightCapture = Invoke-RendererCapture 'advanced' @(4, 67, 0, 0) `
+    @('-flashlight') 'flashlight-on'
+$captures.Add($flashlightCapture)
+if ($unlitEntranceHash -eq (Get-FileHash -LiteralPath $flashlightCapture `
+    -Algorithm SHA256).Hash) {
+    throw 'The advanced flashlight capture was identical to the unlit view'
+}
+
 $demoResults = @()
 if (-not $SkipDemos) {
     $demoResults += Invoke-DemoTest 1
@@ -141,6 +176,14 @@ if (-not $SkipMontage) {
             if ($LASTEXITCODE -ne 0) { throw "ImageMagick failed while making $row" }
             $rowFiles.Add($row)
         }
+        foreach ($doorState in $doorStates) {
+            $classic = Join-Path $runtimeDir "classic-door-23-72-$doorState.bmp"
+            $advanced = Join-Path $runtimeDir "advanced-door-23-72-$doorState.bmp"
+            $row = Join-Path $runtimeDir "renderer-test-door-$doorState.png"
+            & $magick.Source $classic -resize '480x270!' $advanced -resize '480x270!' +append $row
+            if ($LASTEXITCODE -ne 0) { throw "ImageMagick failed while making $row" }
+            $rowFiles.Add($row)
+        }
         $montage = Join-Path $runtimeDir 'renderer-regression-montage.png'
         & $magick.Source @rowFiles -append $montage
         if ($LASTEXITCODE -ne 0) { throw 'ImageMagick failed while making the renderer montage' }
@@ -151,6 +194,8 @@ $result = [pscustomobject]@{
     Configuration = $Configuration
     RuntimeDirectory = $runtimeDir
     ProbePairs = $probes.Count
+    DoorStatePairs = $doorStates.Count
+    FlashlightCaptures = 1
     Captures = $captures.Count
     DemoResults = $demoResults
     Montage = $montage

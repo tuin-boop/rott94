@@ -3221,10 +3221,20 @@ void      ThreeDRefresh (void)
                 doorobjlist[doorIndex]->tilex==doorX &&
                 doorobjlist[doorIndex]->tiley==doorY)
                {
-               doorobjlist[doorIndex]->position=doorPosition;
+               /* Drive the real transition instead of assigning only the
+                  animation frame.  The first DoorOpening step connects the
+                  areas on each side, which is essential for spotvis and makes
+                  the advanced probe show the same scenery through the opening
+                  as an actual in-game door. */
+               doorobjlist[doorIndex]->position=0;
                doorobjlist[doorIndex]->texture=
-                  doorobjlist[doorIndex]->basetexture+
-                  ((doorPosition+1)>>13);
+                  doorobjlist[doorIndex]->basetexture;
+               doorobjlist[doorIndex]->action=dr_closed;
+               while (doorobjlist[doorIndex]->position<doorPosition)
+                  {
+                  doorobjlist[doorIndex]->action=dr_opening;
+                  DoorOpening(doorIndex);
+                  }
                break;
                }
          }
