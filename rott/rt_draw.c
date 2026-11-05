@@ -220,14 +220,19 @@ byte *AdvancedRendererGetTransPatchPixels(int lump)
    return W_CacheLumpNum(lump,PU_CACHE,Cvt_transpatch_t,1);
 }
 
+extern int AdvancedRendererSkyStartRow(void);
+
 extern void AdvancedRendererDrawWorld(const word *tiles,
    const byte *specialOrientation,const word *specialTexture,
-   const signed short *specialPatches,const byte *specialSkyOccluder,
+   const signed short *specialAltTexture,
+   const signed short *specialPatches,const byte *visibleTiles,
    const word *wallTextures,
    const signed short *wallAltTextures,
    int mapsize,int worldHeight,float playerx,float playery,float cameraHeight,
    float yaw,float pitch,const byte *floorPixels,const byte *ceilingPixels,
-   const byte *skyPixels,int skyRevision,int spriteCount,
+   const byte *skyPixels,int skyRevision,int skyStartRow,
+   const signed short *skyPixelAngles,int skyViewWidth,int skyFineAngle,
+   int spriteCount,
    const float *spriteX,const float *spriteY,const float *spriteZ,
    const int *spriteLump,int weaponMain,int weaponAlt,
    int weaponXOffset,int weaponYOffset,const byte *lightLevels,
@@ -3042,12 +3047,70 @@ void      ThreeDRefresh (void)
       }
 #endif
 
+   {
+   static bool renderProbeConfigured=false;
+   if (!renderProbeConfigured && player)
+      {
+      int probeParm=CheckParm("advancedprobecamera");
+      if (probeParm && probeParm+4<_argc)
+         {
+         int probeX=ParseNum(_argv[probeParm+1]);
+         int probeY=ParseNum(_argv[probeParm+2]);
+         int probeYaw=ParseNum(_argv[probeParm+3]);
+         int probePitch=ParseNum(_argv[probeParm+4]);
+         if (probeX>0 && probeX<MAPSIZE-1 &&
+             probeY>0 && probeY<MAPSIZE-1)
+            {
+            player->x=(probeX<<TILESHIFT)+(TILEGLOBAL/2);
+            player->y=(probeY<<TILESHIFT)+(TILEGLOBAL/2);
+            player->tilex=probeX;
+            player->tiley=probeY;
+            player->angle=(probeYaw*FINEANGLES/360)&(FINEANGLES-1);
+            {
+            extern void SetModernProbePitch(int pitch);
+            /* Command-line probes use conventional camera degrees (positive
+               looks down).  The software renderer stores the inverse sign;
+               live mouse input already performs this same conversion. */
+            SetModernProbePitch((AdvancedRendererActive() ? probePitch :
+               -probePitch)*FINEANGLES/360);
+            }
+            }
+         }
+      {
+      int doorProbeParm=CheckParm("advanceddoorprobe");
+      if (doorProbeParm && doorProbeParm+3<_argc)
+         {
+         int doorX=ParseNum(_argv[doorProbeParm+1]);
+         int doorY=ParseNum(_argv[doorProbeParm+2]);
+         int doorPosition=ParseNum(_argv[doorProbeParm+3]);
+         int doorIndex;
+         if (doorPosition<0) doorPosition=0;
+         if (doorPosition>65535) doorPosition=65535;
+         for (doorIndex=0;doorIndex<doornum;doorIndex++)
+            if (doorobjlist[doorIndex] &&
+                doorobjlist[doorIndex]->tilex==doorX &&
+                doorobjlist[doorIndex]->tiley==doorY)
+               {
+               doorobjlist[doorIndex]->position=doorPosition;
+               doorobjlist[doorIndex]->texture=
+                  doorobjlist[doorIndex]->basetexture+
+                  ((doorPosition+1)>>13);
+               break;
+               }
+         }
+      }
+      renderProbeConfigured=true;
+      }
+   }
+
    if (AdvancedRendererActive() && player)
       {
+      static bool advancedMapDumped=false;
+      static bool advancedObjectsDumped=false;
       static byte specialOrientation[MAPSIZE*MAPSIZE];
       static word specialTexture[MAPSIZE*MAPSIZE];
+      static signed short specialAltTexture[MAPSIZE*MAPSIZE];
       static signed short specialPatches[MAPSIZE*MAPSIZE*3];
-      static byte specialSkyOccluder[MAPSIZE*MAPSIZE];
       static word gpuWallTexture[MAPSIZE*MAPSIZE];
       static signed short gpuWallAlt[MAPSIZE*MAPSIZE];
       static float gpuSpriteX[MAXVISIBLE],gpuSpriteY[MAXVISIBLE];
@@ -3058,16 +3121,81 @@ void      ThreeDRefresh (void)
       int gpuSpriteCount=0;
       int gpuMovingWallCount=0;
       int gpuWeaponMain,gpuWeaponAlt,gpuWeaponX,gpuWeaponY;
-      int gpuRailingLump=W_GetNumForName("RAILING");
       statobj_t *gpuStat;
       objtype *gpuActor;
       int x,y;
-      int signedpitch=(player->yzangle>ANG180) ?
-         player->yzangle-FINEANGLES : player->yzangle;
-      float yaw=(float)player->angle*(360.0f/(float)FINEANGLES);
-      float pitch=(float)signedpitch*(360.0f/(float)FINEANGLES);
-      float gpuCameraHeight=(float)(nominalheight-player->z+
-         locplayerstate->playerheight+locplayerstate->heightoffset)/64.0f;
+      int signedpitch;
+      float yaw,pitch,gpuCameraHeight;
+
+      if (!advancedMapDumped && CheckParm("advancedmapdump"))
+         {
+         FILE *mapFile=fopen("advanced-map.csv","w");
+         if (mapFile)
+            {
+            fprintf(mapFile,"map,%d,levelheight,%d,start,%d,%d\n",
+               gamestate.mapon,levelheight,player->tilex,player->tiley);
+            for (y=0;y<MAPSIZE;y++)
+               {
+               for (x=0;x<MAPSIZE;x++)
+                  fprintf(mapFile,"%u%s",(unsigned)tilemap[x][y],
+                     x==MAPSIZE-1 ? "" : ",");
+               fputc('\n',mapFile);
+               }
+            fclose(mapFile);
+            }
+         advancedMapDumped=true;
+         }
+
+      if (!advancedObjectsDumped && CheckParm("advancedobjectdump"))
+         {
+         FILE *objectFile=fopen("advanced-objects.csv","w");
+         if (objectFile)
+            {
+            FILE *doorFile=fopen("advanced-doors.csv","w");
+            statobj_t *dumpStat;
+            objtype *dumpActor;
+            fprintf(objectFile,"kind,x,y,z,tilex,tiley,shape,item_or_class,flags,active\n");
+            for (dumpStat=FIRSTSTAT;dumpStat;dumpStat=dumpStat->statnext)
+               fprintf(objectFile,"stat,%.4f,%.4f,%d,%d,%d,%d,%u,%lu,%d\n",
+                  (double)dumpStat->x/(double)TILEGLOBAL,
+                  (double)dumpStat->y/(double)TILEGLOBAL,dumpStat->z,
+                  dumpStat->tilex,dumpStat->tiley,dumpStat->shapenum,
+                  dumpStat->itemnumber,(unsigned long)dumpStat->flags,
+                  (dumpStat->flags&FL_ACTIVE)!=0);
+            for (dumpActor=FIRSTACTOR;dumpActor;dumpActor=dumpActor->next)
+               fprintf(objectFile,"actor,%.4f,%.4f,%d,%d,%d,%d,%d,%lu,%d\n",
+                  (double)dumpActor->x/(double)TILEGLOBAL,
+                  (double)dumpActor->y/(double)TILEGLOBAL,dumpActor->z,
+                  dumpActor->tilex,dumpActor->tiley,dumpActor->shapenum,
+                  dumpActor->obclass,(unsigned long)dumpActor->flags,
+                  (dumpActor->flags&FL_ACTIVE)!=0);
+            for (x=0;x<doornum;x++)
+               if (doorobjlist[x])
+                  {
+                  patch_t *doorPatch=NULL;
+                  /* Closed doors are raw wall columns, not patch_t data.
+                     Only decode the animated opening frames as patches. */
+                  if (doorobjlist[x]->texture!=doorobjlist[x]->basetexture)
+                     doorPatch=(patch_t *)W_CacheLumpNum(
+                        doorobjlist[x]->texture,PU_CACHE,Cvt_patch_t,1);
+                  fprintf(objectFile,"door,%d.5000,%d.5000,%d,%d,%d,%u,%d,%lu,%d\n",
+                     doorobjlist[x]->tilex,doorobjlist[x]->tiley,
+                     doorobjlist[x]->position,doorobjlist[x]->tilex,
+                     doorobjlist[x]->tiley,doorobjlist[x]->texture,
+                     doorobjlist[x]->vertical,(unsigned long)doorobjlist[x]->flags,
+                     spotvis[doorobjlist[x]->tilex][doorobjlist[x]->tiley]!=0);
+                  if (doorFile && doorPatch)
+                     fprintf(doorFile,"%d,%d,%u,%d,%d,%d,%d,%d,%d\n",
+                        doorobjlist[x]->tilex,doorobjlist[x]->tiley,
+                        doorobjlist[x]->texture,doorPatch->width,doorPatch->height,
+                        doorPatch->origsize,doorPatch->leftoffset,
+                        doorPatch->topoffset,doorobjlist[x]->vertical);
+                  }
+            if (doorFile) fclose(doorFile);
+            fclose(objectFile);
+            }
+         advancedObjectsDumped=true;
+         }
 
       /* The software wall pass normally refreshes these globals.  Player
          movement also consumes them, so keep them authoritative even when
@@ -3089,10 +3217,25 @@ void      ThreeDRefresh (void)
          drawing.  The GPU path is much faster, so explicitly service SDL once
          before presenting to keep Windows and relative mouse input live. */
       IN_PumpEvents();
+      /* Retain the original raycaster as the visibility authority.  It marks
+         spotvis without constraining the perspective presentation, preventing
+         the GPU path from revealing map-boundary geometry and actors through
+         opaque walls while preserving transparent masked-wall sight lines. */
+      memset(spotvis,0,sizeof(spotvis));
+      visptr=&vislist[0];
+      WallRefresh();
+      signedpitch=(player->yzangle>ANG180) ?
+         player->yzangle-FINEANGLES : player->yzangle;
+      yaw=(float)viewangle*(360.0f/(float)FINEANGLES);
+      pitch=(float)signedpitch*(360.0f/(float)FINEANGLES);
+      /* pheight is measured down from the map ceiling; OpenGL world Y is
+         measured up from the floor.  Convert across the full level column,
+         rather than treating the character's eye offset as floor height. */
+      gpuCameraHeight=((float)(levelheight*64-pheight))/64.0f;
       BuildDynamicTorchLights();
       memset(specialOrientation,0,sizeof(specialOrientation));
       memset(specialTexture,0,sizeof(specialTexture));
-      memset(specialSkyOccluder,0,sizeof(specialSkyOccluder));
+      for (x=0;x<MAPSIZE*MAPSIZE;x++) specialAltTexture[x]=-2;
       for (x=0;x<MAPSIZE*MAPSIZE*3;x++) specialPatches[x]=-1;
       for (x=0;x<MAPSIZE*MAPSIZE;x++) gpuWallAlt[x]=-2;
       for (x=0;x<MAPSIZE;x++)
@@ -3110,6 +3253,11 @@ void      ThreeDRefresh (void)
                {
                specialOrientation[x*MAPSIZE+y]=doorobjlist[index]->vertical ? 1 : 2;
                specialTexture[x*MAPSIZE+y]=doorobjlist[index]->texture;
+               specialAltTexture[x*MAPSIZE+y]=doorobjlist[index]->alttexture;
+               /* A fully closed door uses the same raw 64x64 column format as
+                  a wall.  Opening frames are patch-format artwork. */
+               if (doorobjlist[index]->texture==doorobjlist[index]->basetexture)
+                  specialTexture[x*MAPSIZE+y]|=0x8000;
                }
             else if (M_ISMWALL(x,y) && (index<MAXMASKED) && maskobjlist[index])
                {
@@ -3118,20 +3266,20 @@ void      ThreeDRefresh (void)
                specialPatches[cell*3]=maskobjlist[index]->bottomtexture;
                specialPatches[cell*3+1]=maskobjlist[index]->midtexture;
                specialPatches[cell*3+2]=maskobjlist[index]->toptexture;
-               /* The software renderer stops world visibility at outdoor
-                  railings; transparent pixels reveal the already-drawn sky. */
-               specialSkyOccluder[cell]=
-                  maskobjlist[index]->bottomtexture==gpuRailingLump &&
-                  maskobjlist[index]->midtexture<0 &&
-                  maskobjlist[index]->toptexture<0;
                }
             }
 
+      /* Match DrawScaleds' authoritative active-static list.  FIRSTSTAT also
+         contains dormant map markers and inactive decoration; rendering that
+         broader list exposed ankh markers and torches through solid towers. */
       for (gpuStat=firstactivestat;gpuStat && gpuSpriteCount<MAXVISIBLE;
            gpuStat=gpuStat->nextactive)
-         if (gpuStat->shapenum!=NOTHING &&
-             abs(gpuStat->tilex-player->tilex)<=32 &&
-             abs(gpuStat->tiley-player->tiley)<=32)
+         if (gpuStat->shapenum!=NOTHING && gpuStat->visspot &&
+             (gpuStat->visspot[0] || gpuStat->visspot[-1] ||
+              gpuStat->visspot[1] || gpuStat->visspot[-129] ||
+              gpuStat->visspot[-128] || gpuStat->visspot[-127] ||
+              gpuStat->visspot[129] || gpuStat->visspot[128] ||
+              gpuStat->visspot[127]))
             {
             int lump=gpuStat->shapenum+shapestart;
             if (gpuStat->flags&FL_ROTATING) lump+=StatRotate(gpuStat);
@@ -3143,8 +3291,15 @@ void      ThreeDRefresh (void)
       for (gpuActor=firstactive;gpuActor && gpuSpriteCount<MAXVISIBLE;
            gpuActor=gpuActor->nextactive)
          if (gpuActor!=player && gpuActor->shapenum!=NOTHING &&
-             abs(gpuActor->tilex-player->tilex)<=32 &&
-             abs(gpuActor->tiley-player->tiley)<=32)
+             (spotvis[gpuActor->tilex][gpuActor->tiley] ||
+              spotvis[gpuActor->tilex-1][gpuActor->tiley] ||
+              spotvis[gpuActor->tilex+1][gpuActor->tiley] ||
+              spotvis[gpuActor->tilex-1][gpuActor->tiley-1] ||
+              spotvis[gpuActor->tilex][gpuActor->tiley-1] ||
+              spotvis[gpuActor->tilex+1][gpuActor->tiley-1] ||
+              spotvis[gpuActor->tilex-1][gpuActor->tiley+1] ||
+              spotvis[gpuActor->tilex][gpuActor->tiley+1] ||
+              spotvis[gpuActor->tilex+1][gpuActor->tiley+1]))
             {
             int lump=gpuActor->shapenum+shapestart;
             if (gpuActor->state && gpuActor->state->rotate)
@@ -3172,7 +3327,7 @@ void      ThreeDRefresh (void)
       if (SHOW_PLAYER_STATS())
          DrawStats();
       AdvancedRendererDrawWorld(&tilemap[0][0],specialOrientation,
-         specialTexture,specialPatches,specialSkyOccluder,
+         specialTexture,specialAltTexture,specialPatches,&spotvis[0][0],
          gpuWallTexture,gpuWallAlt,
          MAPSIZE,levelheight,
          (float)player->x/(float)TILEGLOBAL,
@@ -3180,6 +3335,7 @@ void      ThreeDRefresh (void)
          yaw,pitch,
          AdvancedRendererFloorPixels(),AdvancedRendererCeilingPixels(),
          AdvancedRendererSkyPixels(),AdvancedRendererSkyRevision(),
+         AdvancedRendererSkyStartRow(),pixelangle,viewwidth,viewangle,
          gpuSpriteCount,gpuSpriteX,gpuSpriteY,gpuSpriteZ,gpuSpriteLump,
          gpuWeaponMain,gpuWeaponAlt,gpuWeaponX,gpuWeaponY,
          &dynamicTorchLight[0][0],advancedlighting,advanceddarkambient,
@@ -3288,6 +3444,12 @@ void      ThreeDRefresh (void)
    if (HUD == true)
       DrawPlayerLocation();
 
+   /* Let the deterministic classic-renderer probe capture this completed
+      world frame, rather than an earlier menu or loading-card presentation. */
+   {
+   extern void ClassicCaptureWorldFrameReady(void);
+   ClassicCaptureWorldFrameReady();
+   }
    FlipPage();
    gamestate.frame++;
 

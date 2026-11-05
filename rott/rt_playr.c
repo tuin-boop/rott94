@@ -170,6 +170,24 @@ static int modernPitchFrac = 0;
 static objtype *modernPitchPlayer = NULL;
 static int modernPitchMap = -1;
 
+/* Hidden renderer-regression support: seed the same persistent pitch state
+   used by live modern mouselook so a deterministic camera probe is not reset
+   by the next input poll. */
+void SetModernProbePitch(int pitch)
+{
+   if (pitch>YZANGLELIMIT) pitch=YZANGLELIMIT;
+   else if (pitch<-YZANGLELIMIT) pitch=-YZANGLELIMIT;
+   modernPitchFrac=pitch<<ANGLEBITS;
+   modernPitchPlayer=player;
+   modernPitchMap=gamestate.mapon;
+   if (locplayerstate) SetPlayerHorizon(locplayerstate,pitch);
+   if (player)
+      {
+      player->yzangle=pitch;
+      Fix(player->yzangle);
+      }
+}
+
 int oldcyberx = 0;
 int oldcybery = 0;
 int CYBERDEADRANGE = 6000;

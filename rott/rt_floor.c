@@ -86,6 +86,20 @@ static byte     advancedSkyTile[64*64];
 static bool     advancedSkyAvailable=false;
 static int      advancedSkyRevision=0;
 
+int AdvancedRendererSkyStartRow(void)
+{
+   int ofs=(((maxheight)-(player->z))>>3)+
+      (centery*200/iGLOBAL_SCREENHEIGHT-
+      ((viewheight*200/iGLOBAL_SCREENHEIGHT)>>1));
+   if (ofs>centerskypost)
+      ofs=centerskypost;
+   else if (((centerskypost-ofs)+
+             viewheight*200/iGLOBAL_SCREENHEIGHT)>1799)
+      ofs=-(1799-(centerskypost+
+            viewheight*200/iGLOBAL_SCREENHEIGHT));
+   return centerskypost-ofs;
+}
+
 const byte *AdvancedRendererFloorPixels(void)
 {
    return g_floor;

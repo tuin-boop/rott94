@@ -195,6 +195,7 @@ static void StartupMark (const char *stage)
 int main (int argc, char *argv[])
 {
     char *macwd;
+    int demoParm;
     extern char *BATTMAPS;
 #ifndef DOS
 	_argc = argc;
@@ -457,6 +458,21 @@ int main (int argc, char *argv[])
    gamestate.battlemode = battle_StandAloneGame;
 
    BATTLE_SetOptions( &BATTLE_Options[ battle_StandAloneGame ] );
+
+   /* Deterministic renderer regression path: play one of the shipped demos
+      directly, without title/menu input.  This is command-line only and does
+      not alter ordinary startup behavior. */
+   demoParm=CheckParm("PLAYDEMO");
+   if (demoParm && demoParm+1<_argc)
+      {
+      int demoNumber=ParseNum(_argv[demoParm+1]);
+      if (!DemoExists(demoNumber))
+         Error("Demo %d is not available.\n",demoNumber);
+      LoadDemo(demoNumber);
+      GameLoop();
+      QuitGame();
+      return 0;
+      }
 
    if (turbo || tedlevel)
 		{

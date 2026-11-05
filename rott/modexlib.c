@@ -442,6 +442,14 @@ static SDL_GLContext advancedGlContext = NULL;
 static GLuint advancedGlTexture = 0;
 static uint32_t *advancedGlPixels = NULL;
 static bool advancedWorldReady = false;
+static bool advancedCaptureRequested = false;
+static bool advancedCaptureSaved = false;
+static bool advancedCaptureSequence = false;
+static int advancedCaptureSequenceCount = 0;
+static Uint32 advancedCaptureSequenceNext = 0;
+static bool classicCaptureRequested = false;
+static bool classicCaptureSaved = false;
+static bool classicWorldFrameReady = false;
 static GLuint advancedWallTextures[1024];
 static GLuint advancedFloorTexture = 0;
 static GLuint advancedCeilingTexture = 0;
@@ -464,6 +472,7 @@ extern unsigned int lastInteraction;
 extern byte *AdvancedRendererGetWallPixels(int lump);
 extern byte *AdvancedRendererGetPatchPixels(int lump);
 extern byte *AdvancedRendererGetTransPatchPixels(int lump);
+extern byte *colormap;
 
 void AdvancedRendererPrepareHud(void)
 {
@@ -750,7 +759,24 @@ static void AdvancedPatchFaceRange(int lump,bool transparentPatch,
 static void AdvancedPatchFace(int lump,bool transparentPatch,
 	float x0,float z0,float x1,float z1)
 {
-	AdvancedPatchFaceRange(lump,transparentPatch,x0,z0,x1,z1,0,1);
+	int height,topoffset;
+	if (!AdvancedPatchTexture(lump,transparentPatch,NULL,&height,NULL,NULL,
+		&topoffset)) return;
+	AdvancedPatchFaceRange(lump,transparentPatch,x0,z0,x1,z1,
+		1.0f+(float)(topoffset-height)/64.0f,
+		1.0f+(float)topoffset/64.0f);
+}
+
+static void AdvancedPatchFaceLayer(int lump,bool transparentPatch,
+	float x0,float z0,float x1,float z1,float level,int anchorTopOffset)
+{
+	int height;
+	float top;
+	if (!AdvancedPatchTexture(lump,transparentPatch,NULL,&height,NULL,NULL,
+		NULL)) return;
+	top=level+1.0f+(float)anchorTopOffset/64.0f;
+	AdvancedPatchFaceRange(lump,transparentPatch,x0,z0,x1,z1,
+		top-(float)height/64.0f,top);
 }
 
 static void AdvancedApplyLight(float level,int lightingEnabled,
@@ -763,8 +789,12 @@ static void AdvancedApplyLight(float level,int lightingEnabled,
 		glColor3f(1,1,1);
 		return;
 	}
-	base=darkAmbient ? .30f : .72f;
-	red=base+level*.085f;
+	/* The classic shade table's advanced-dark ambience lands near its darkest
+	   usable ramps when no local flame reaches a tile.  A 30% floor made sealed
+	   rooms visibly grey; keep the unlit floor low and let the existing torch
+	   field restore the courtyard's intended brightness. */
+	base=darkAmbient ? .18f : .72f;
+	red=base+level*.105f;
 	if (red>1.0f) red=1.0f;
 	if (coloredLights && level>0)
 	{
@@ -802,6 +832,18 @@ static void AdvancedSetCornerLight(const byte *lightLevels,int mapsize,
 	AdvancedApplyLight(level,lightingEnabled,darkAmbient,coloredLights);
 }
 
+static bool AdvancedTileVisible(const byte *visibleTiles,int mapsize,int x,int y)
+{
+	int dx,dy;
+	if (!visibleTiles) return true;
+	for (dx=-1;dx<=1;dx++)
+		for (dy=-1;dy<=1;dy++)
+			if (x+dx>=0 && y+dy>=0 && x+dx<mapsize && y+dy<mapsize &&
+				visibleTiles[(x+dx)*mapsize+y+dy])
+				return true;
+	return false;
+}
+
 static void AdvancedBillboard(int lump,float x,float y,float z,float yaw)
 {
 	int width,height,origsize,leftoffset,topoffset,sizeShift;
@@ -823,8 +865,11 @@ static void AdvancedBillboard(int lump,float x,float y,float z,float yaw)
 	if (origsize<=0) origsize=64<<sizeShift;
 	leftEdge=-(float)(origsize/2+leftoffset)*pixelScale;
 	rightEdge=leftEdge+(float)width*pixelScale;
-	bottom=z+(float)(topoffset-height)*pixelScale;
-	top=z+(float)topoffset*pixelScale;
+	/* World z is the sprite's physical base.  Patch topoffset is metadata for
+	   the classic screen-space scaler; using it as a world-space anchor puts
+	   many floor decorations (notably Area 1 torches) below the floor. */
+	bottom=z;
+	top=z+(float)height*pixelScale;
 	glEnable(GL_TEXTURE_2D);
 	glEnable(GL_ALPHA_TEST);
 	glAlphaFunc(GL_GREATER,0.05f);
@@ -907,9 +952,28 @@ static GLuint AdvancedSkyTexture(const byte *source,int revision)
 	for (y=0;y<400;y++)
 		for (x=0;x<256;x++)
 	{
-		SDL_Color c=palette->colors[source[x*400+y]];
+		int color=source[x*400+y];
+		SDL_Color c;
+		/* DrawSky uses the fixed shade-16 colormap during ordinary play.  Apply
+		   the same palette transform before uploading so the GPU sky has the
+		   original stormy contrast instead of appearing self-illuminated. */
+		if (colormap) color=colormap[(16<<8)+color];
+		c=palette->colors[color];
 		rgba[y*256+x]=0xff000000u|((uint32_t)c.r<<16)|
 			((uint32_t)c.g<<8)|c.b;
+	}
+	if (CheckParm("advancedskydump"))
+	{
+		SDL_Surface *dump=SDL_CreateRGBSurfaceWithFormat(0,256,400,32,
+			SDL_PIXELFORMAT_ARGB8888);
+		if (dump)
+		{
+			for (y=0;y<400;y++)
+				memcpy((byte *)dump->pixels+y*dump->pitch,rgba+y*256,
+					256u*sizeof(uint32_t));
+			SDL_SaveBMP(dump,"advanced-sky-panorama.bmp");
+			SDL_FreeSurface(dump);
+		}
 	}
 	glGenTextures(1,&advancedSkyTexture);
 	glBindTexture(GL_TEXTURE_2D,advancedSkyTexture);
@@ -930,14 +994,16 @@ bool AdvancedRendererActive(void)
 }
 
 void AdvancedRendererDrawWorld(const word *tiles,const byte *specialOrientation,
-	const word *specialTexture,
-	const signed short *specialPatches,const byte *specialSkyOccluder,
+	const word *specialTexture,const signed short *specialAltTexture,
+	const signed short *specialPatches,const byte *visibleTiles,
 	const word *wallTextures,
 	const signed short *wallAltTextures,
 	int mapsize,int worldHeight,float playerx,float playery,float cameraHeight,
 	float yaw,float pitch,
 	const byte *floorPixels,const byte *ceilingPixels,
-	const byte *skyPixels,int skyRevision,int spriteCount,
+	const byte *skyPixels,int skyRevision,int skyStartRow,
+	const signed short *skyPixelAngles,int skyViewWidth,int skyFineAngle,
+	int spriteCount,
 	const float *spriteX,const float *spriteY,const float *spriteZ,
 	const int *spriteLump,int weaponMain,int weaponAlt,
 	int weaponXOffset,int weaponYOffset,const byte *lightLevels,
@@ -956,8 +1022,11 @@ void AdvancedRendererDrawWorld(const word *tiles,const byte *specialOrientation,
 	SDL_GL_GetDrawableSize(sdl_window,&drawableWidth,&drawableHeight);
 	if (drawableHeight<1) drawableHeight=1;
 	aspect=(double)drawableWidth/(double)drawableHeight;
-	top=tan(75.0*3.14159265358979323846/360.0)*0.05;
-	right=top*aspect;
+	/* Match the classic raycaster's current 320-column projection.  Its
+	   widescreen focal-width adjustment preserves the original vertical FOV
+	   while revealing additional scenery horizontally. */
+	right=0.05*(160.0/(double)iGLOBAL_FOCALWIDTH);
+	top=right/aspect;
 
 	glViewport(0,0,drawableWidth,drawableHeight);
 	glEnable(GL_DEPTH_TEST);
@@ -987,49 +1056,79 @@ void AdvancedRendererDrawWorld(const word *tiles,const byte *specialOrientation,
 	skyTexture=AdvancedSkyTexture(skyPixels,skyRevision);
 	if (skyTexture)
 	{
-		/* A level view should expose roughly the same central half of ROTT's
-		   400-row panorama as the classic 200-row viewport.  The old short
-		   cylinder squeezed the entire panorama into one screen and exposed its
-		   artificial zenith cap even while looking almost straight ahead. */
-		const float radius=24.0f,lo=-40.0f,hi=40.0f;
-		const int slices=64;
-		int slice;
+		static bool skyInfoSaved=false;
+		float verticalFov=(float)(2.0*atan(top/.05)*180.0/
+			3.14159265358979323846);
+		/* DrawSky is top-anchored: looking upward exposes earlier cloud rows rather
+		   than stretching the neutral mountain window over the whole viewport.
+		   A perspective view needs that anchor expressed explicitly.  Twenty-five
+		   degrees spans the packed panorama's 200-row half, matching the classic
+		   transition from the neutral horizon to the overhead cloud field. */
+		float baseFirstRow=(float)skyStartRow;
+		float firstRow;
+		/* The software renderer's high-resolution sky offset uses a virtual
+		   1800-row range even though this packed panorama contains 400 rows.
+		   Normalize the neutral window first, then apply real camera pitch; doing
+		   it in the opposite order pinned free look to the mountain half. */
+		if (baseFirstRow<0) baseFirstRow=0;
+		if (baseFirstRow>200) baseFirstRow=200;
+		firstRow=baseFirstRow+pitch*8.0f;
+		float requestedFirstRow=firstRow;
+		int screenx;
+		if (firstRow<0) firstRow=0;
+		if (firstRow>200) firstRow=200;
+		if (!skyInfoSaved && CheckParm("advancedskydump"))
+		{
+			FILE *info=fopen("advanced-sky-info.txt","w");
+			if (info)
+			{
+				fprintf(info,"start=%d pitch=%.3f vfov=%.3f requested=%.3f used=%.3f\n",
+					skyStartRow,pitch,verticalFov,requestedFirstRow,firstRow);
+				fclose(info);
+				skyInfoSaved=true;
+			}
+		}
 		glDisable(GL_DEPTH_TEST);
 		glDepthMask(GL_FALSE);
 		glEnable(GL_TEXTURE_2D);
 		glBindTexture(GL_TEXTURE_2D,skyTexture);
 		glColor3f(1,1,1);
-		/* ROTT's source is a cylindrical panorama, not an equirectangular
-		   sphere.  Preserve that projection to avoid pinched cloud rings. */
+		/* The software sky uses its precomputed ray angle for every screen
+		   column.  Reuse those exact angles here: the wall projection's native
+		   widescreen focal adjustment intentionally differs from the legacy sky
+		   table, so a generic 3D cylinder can never line up pixel-for-pixel. */
+		glMatrixMode(GL_PROJECTION);
+		glPushMatrix();
+		glLoadIdentity();
+		glOrtho(0,drawableWidth,drawableHeight,0,-1,1);
+		glMatrixMode(GL_MODELVIEW);
+		glPushMatrix();
+		glLoadIdentity();
 		glBegin(GL_QUADS);
-		for (slice=0;slice<slices;slice++)
+		for (screenx=0;screenx<drawableWidth;screenx++)
 		{
-			double lon0=6.28318530717958647692*(double)slice/(double)slices;
-			double lon1=6.28318530717958647692*(double)(slice+1)/(double)slices;
-			float u0=(float)slice/(float)slices,u1=(float)(slice+1)/(float)slices;
-			glTexCoord2f(u0,1); glVertex3f((float)cos(lon0)*radius,lo,(float)sin(lon0)*radius);
-			glTexCoord2f(u1,1); glVertex3f((float)cos(lon1)*radius,lo,(float)sin(lon1)*radius);
-			glTexCoord2f(u1,0); glVertex3f((float)cos(lon1)*radius,hi,(float)sin(lon1)*radius);
-			glTexCoord2f(u0,0); glVertex3f((float)cos(lon0)*radius,hi,(float)sin(lon0)*radius);
+			int viewx=skyViewWidth>0 ?
+				(screenx*skyViewWidth)/drawableWidth : 0;
+			int angle=skyFineAngle;
+			int column;
+			float u,v0,v1;
+			if (viewx>=skyViewWidth) viewx=skyViewWidth-1;
+			if (skyPixelAngles && viewx>=0) angle+=skyPixelAngles[viewx];
+			angle&=2047;
+			column=(511-(angle&511))>>1;
+			u=((float)column+.5f)/256.0f;
+			v0=firstRow/400.0f;
+			v1=(firstRow+200.0f)/400.0f;
+			glTexCoord2f(u,v0); glVertex2f((float)screenx,0);
+			glTexCoord2f(u,v0); glVertex2f((float)screenx+1,0);
+			glTexCoord2f(u,v1); glVertex2f((float)screenx+1,(float)drawableHeight);
+			glTexCoord2f(u,v1); glVertex2f((float)screenx,(float)drawableHeight);
 		}
 		glEnd();
-		/* Stable dark caps are preferable to stretching a panorama into a
-		   singularity when the player looks completely vertical. */
-		glDisable(GL_TEXTURE_2D);
-		/* The cylindrical source has no zenith pixels.  Blend its upper edge
-		   into a muted cloud colour instead of exposing a black circular cap
-		   during near-vertical free look. */
-		glShadeModel(GL_SMOOTH);
-		glBegin(GL_TRIANGLE_FAN);
-		glColor3f(.12f,.13f,.18f);
-		glVertex3f(0,hi,0);
-		for (slice=0;slice<=slices;slice++)
-		{
-			double lon=6.28318530717958647692*(double)slice/(double)slices;
-			glColor3f(.31f,.32f,.36f);
-			glVertex3f((float)cos(lon)*radius,hi,(float)sin(lon)*radius);
-		}
-		glEnd();
+		glPopMatrix();
+		glMatrixMode(GL_PROJECTION);
+		glPopMatrix();
+		glMatrixMode(GL_MODELVIEW);
 		glDepthMask(GL_TRUE);
 		glEnable(GL_DEPTH_TEST);
 		glDisable(GL_TEXTURE_2D);
@@ -1040,41 +1139,6 @@ void AdvancedRendererDrawWorld(const word *tiles,const byte *specialOrientation,
 	maxx=(int)playerx+32; if(maxx>mapsize-2) maxx=mapsize-2;
 	miny=(int)playery-32; if(miny<1) miny=1;
 	maxy=(int)playery+32; if(maxy>mapsize-2) maxy=mapsize-2;
-
-	/* Classic masked-wall visibility terminates at outdoor railings.  Its
-	   transparent pixels therefore reveal the sky buffer, not map boundary
-	   geometry farther outside the playable area.  Reproduce that with a
-	   depth-only portal plane before drawing world geometry; the railing art
-	   itself is drawn later at the same depth with GL_LEQUAL. */
-	if (specialSkyOccluder && specialOrientation)
-	{
-		glColorMask(GL_FALSE,GL_FALSE,GL_FALSE,GL_FALSE);
-		glDepthMask(GL_TRUE);
-		glDisable(GL_TEXTURE_2D);
-		glBegin(GL_QUADS);
-		for (x=minx;x<=maxx;x++)
-			for (y=miny;y<=maxy;y++)
-			{
-				int cell=x*mapsize+y;
-				float x0=(float)x,x1=x0+1.0f;
-				float z0=(float)-y,z1=z0-1.0f;
-				if (!specialSkyOccluder[cell]) continue;
-				if (specialOrientation[cell]==1)
-				{
-					glVertex3f(x0+.5f,0,z0); glVertex3f(x0+.5f,0,z1);
-					glVertex3f(x0+.5f,(float)worldHeight,z1);
-					glVertex3f(x0+.5f,(float)worldHeight,z0);
-				}
-				else
-				{
-					glVertex3f(x0,0,z0-.5f); glVertex3f(x1,0,z0-.5f);
-					glVertex3f(x1,(float)worldHeight,z0-.5f);
-					glVertex3f(x0,(float)worldHeight,z0-.5f);
-				}
-			}
-		glEnd();
-		glColorMask(GL_TRUE,GL_TRUE,GL_TRUE,GL_TRUE);
-	}
 
 	/* Level-wide 128x128 flats repeat across the original tile grid. */
 	floorTexture=AdvancedPlaneTexture(floorPixels,&advancedFloorTexture,
@@ -1089,7 +1153,8 @@ void AdvancedRendererDrawWorld(const word *tiles,const byte *specialOrientation,
 		glBegin(GL_QUADS);
 		for (x=minx;x<=maxx;x++)
 			for (y=miny;y<=maxy;y++)
-				if (tiles[x*mapsize+y]==0 || (tiles[x*mapsize+y]&0x8000))
+				if (AdvancedTileVisible(visibleTiles,mapsize,x,y) &&
+					(tiles[x*mapsize+y]==0 || (tiles[x*mapsize+y]&0x8000)))
 				{
 					float x0=(float)x,x1=x0+1.0f;
 					float z0=(float)-y,z1=z0-1.0f;
@@ -1116,7 +1181,8 @@ void AdvancedRendererDrawWorld(const word *tiles,const byte *specialOrientation,
 		glBegin(GL_QUADS);
 		for (x=minx;x<=maxx;x++)
 			for (y=miny;y<=maxy;y++)
-				if (tiles[x*mapsize+y]==0 || (tiles[x*mapsize+y]&0x8000))
+				if (AdvancedTileVisible(visibleTiles,mapsize,x,y) &&
+					(tiles[x*mapsize+y]==0 || (tiles[x*mapsize+y]&0x8000)))
 				{
 					float x0=(float)x,x1=x0+1.0f;
 					float z0=(float)-y,z1=z0-1.0f;
@@ -1137,55 +1203,76 @@ void AdvancedRendererDrawWorld(const word *tiles,const byte *specialOrientation,
 	}
 	glDisable(GL_TEXTURE_2D);
 
-	glBegin(GL_QUADS);
-	for (x=minx;x<=maxx;x++)
-		for (y=miny;y<=maxy;y++)
-		{
-			word tile=tiles[x*mapsize+y];
-			float x0=(float)x,x1=x0+1.0f;
-			float z0=(float)-y,z1=z0-1.0f;
-
-			if ((tile&0xc000)==0xc000 && specialOrientation &&
-			         specialOrientation[x*mapsize+y] &&
-			         (!specialPatches ||
-			          (specialPatches[(x*mapsize+y)*3]<0 &&
-			           specialPatches[(x*mapsize+y)*3+1]<0 &&
-			           specialPatches[(x*mapsize+y)*3+2]<0)))
-			{
-				/* Door/masked-wall geometry uses the authoritative orientation
-				   supplied by the game objects rather than propagated tile flags. */
-				glColor3f(0.80f,0.25f,0.15f);
-				if (specialOrientation[x*mapsize+y]==1)
-				{
-					glVertex3f(x0+0.5f,0,z0); glVertex3f(x0+0.5f,0,z1);
-					glVertex3f(x0+0.5f,(float)worldHeight,z1); glVertex3f(x0+0.5f,(float)worldHeight,z0);
-				}
-				else
-				{
-					glVertex3f(x0,0,z0-0.5f); glVertex3f(x1,0,z0-0.5f);
-					glVertex3f(x1,(float)worldHeight,z0-0.5f); glVertex3f(x0,(float)worldHeight,z0-0.5f);
-				}
-			}
-		}
-	glEnd();
-	/* Doors use the original masked patch artwork.  Masked gates remain the
-	   red diagnostic planes until their three-layer patches are composed. */
+	/* Doors use the original masked patch artwork.  Masked walls with no live
+	   patch layers are intentionally invisible; the former red fallback planes
+	   were diagnostic geometry and could cover entire rooms during gameplay. */
 	if (specialOrientation && specialTexture)
 		for (x=minx;x<=maxx;x++)
 			for (y=miny;y<=maxy;y++)
 			{
 				int cell=x*mapsize+y;
-				if ((tiles[cell]&0x8000) && !(tiles[cell]&0x4000) &&
+				if (AdvancedTileVisible(visibleTiles,mapsize,x,y) &&
+					(tiles[cell]&0x8000) && !(tiles[cell]&0x4000) &&
 					specialOrientation[cell] && specialTexture[cell])
 				{
+					int doorTexture=specialTexture[cell]&0x7fff;
 					float x0=(float)x,x1=x0+1.0f;
 					float z0=(float)-y,z1=z0-1.0f;
 					AdvancedSetTileLight(lightLevels,mapsize,x,y,
 						lightingEnabled,darkAmbient,coloredLights);
-					if (specialOrientation[cell]==1)
-						AdvancedPatchFace(specialTexture[cell],false,x0+.5f,z0,x0+.5f,z1);
+					if (specialTexture[cell]&0x8000)
+					{
+						int altTexture=specialAltTexture ? specialAltTexture[cell] : -2;
+						if (specialOrientation[cell]==1)
+						{
+							/* Closed doors are a composite: their base artwork forms
+							   the bottom 64-unit panel and alttexture fills the wall
+							   above it.  This mirrors DrawWallPost's two raw columns. */
+							if (altTexture>=0 && worldHeight>1)
+							{
+								AdvancedWallFace(doorTexture,x0+.5f,0,z0,
+									x0+.5f,0,z1,x0+.5f,1,z1,x0+.5f,1,z0);
+								AdvancedWallFace(altTexture,x0+.5f,1,z0,
+									x0+.5f,1,z1,x0+.5f,(float)worldHeight,z1,
+									x0+.5f,(float)worldHeight,z0);
+							}
+							else
+								AdvancedMappedWallFace(doorTexture,-2,(float)worldHeight,
+									x0+.5f,z0,x0+.5f,z1);
+						}
+						else
+						{
+							if (altTexture>=0 && worldHeight>1)
+							{
+								AdvancedWallFace(doorTexture,x0,0,z0-.5f,
+									x1,0,z0-.5f,x1,1,z0-.5f,x0,1,z0-.5f);
+								AdvancedWallFace(altTexture,x0,1,z0-.5f,
+									x1,1,z0-.5f,x1,(float)worldHeight,z0-.5f,
+									x0,(float)worldHeight,z0-.5f);
+							}
+							else
+								AdvancedMappedWallFace(doorTexture,-2,(float)worldHeight,
+									x0,z0-.5f,x1,z0-.5f);
+						}
+					}
+					else if (specialOrientation[cell]==1)
+					{
+						int altTexture=specialAltTexture ? specialAltTexture[cell] : -2;
+						AdvancedPatchFace(doorTexture,false,x0+.5f,z0,x0+.5f,z1);
+						if (altTexture>=0 && worldHeight>1)
+							AdvancedWallFace(altTexture,x0+.5f,1,z0,
+								x0+.5f,1,z1,x0+.5f,(float)worldHeight,z1,
+								x0+.5f,(float)worldHeight,z0);
+					}
 					else
-						AdvancedPatchFace(specialTexture[cell],false,x0,z0-.5f,x1,z0-.5f);
+					{
+						int altTexture=specialAltTexture ? specialAltTexture[cell] : -2;
+						AdvancedPatchFace(doorTexture,false,x0,z0-.5f,x1,z0-.5f);
+						if (altTexture>=0 && worldHeight>1)
+							AdvancedWallFace(altTexture,x0,1,z0-.5f,
+								x1,1,z0-.5f,x1,(float)worldHeight,z0-.5f,
+								x0,(float)worldHeight,z0-.5f);
+					}
 				}
 			}
 	/* Masked walls are vertically composed: a transparent bottom layer,
@@ -1198,12 +1285,26 @@ void AdvancedRendererDrawWorld(const word *tiles,const byte *specialOrientation,
 				int bottom=specialPatches[cell*3];
 				int middle=specialPatches[cell*3+1];
 				int topPatch=specialPatches[cell*3+2];
-				if ((tiles[cell]&0xc000)==0xc000 && specialOrientation[cell] &&
+				int anchorTopOffset=0,unused;
+				if (AdvancedTileVisible(visibleTiles,mapsize,x,y) &&
+					(tiles[cell]&0xc000)==0xc000 && specialOrientation[cell] &&
 					(bottom>=0 || middle>=0 || topPatch>=0))
 				{
 					float x0=(float)x,x1=x0+1.0f,z0=(float)-y,z1=z0-1.0f;
 					float ax0,az0,ax1,az1;
 					int layer;
+					/* InterpolateMaskedWall anchors every layer to the bottom
+					   transparent patch when present, otherwise the top, otherwise
+					   the middle patch.  Preserve that somewhat unusual priority. */
+					if (middle>=0)
+						AdvancedPatchTexture(middle,false,NULL,NULL,NULL,&unused,
+							&anchorTopOffset);
+					if (topPatch>=0)
+						AdvancedPatchTexture(topPatch,false,NULL,NULL,NULL,&unused,
+							&anchorTopOffset);
+					if (bottom>=0)
+						AdvancedPatchTexture(bottom,true,NULL,NULL,NULL,&unused,
+							&anchorTopOffset);
 					AdvancedSetTileLight(lightLevels,mapsize,x,y,
 						lightingEnabled,darkAmbient,coloredLights);
 					if (specialOrientation[cell]==1)
@@ -1215,14 +1316,15 @@ void AdvancedRendererDrawWorld(const word *tiles,const byte *specialOrientation,
 						ax0=x0; ax1=x1; az0=az1=z0-.5f;
 					}
 					if (bottom>=0)
-						AdvancedPatchFaceRange(bottom,true,ax0,az0,ax1,az1,0,1);
+						AdvancedPatchFaceLayer(bottom,true,ax0,az0,ax1,az1,0,
+							anchorTopOffset);
 					for (layer=1;layer<worldHeight-1;layer++)
 						if (middle>=0)
-							AdvancedPatchFaceRange(middle,false,ax0,az0,ax1,az1,
-								(float)layer,(float)layer+1.0f);
+							AdvancedPatchFaceLayer(middle,false,ax0,az0,ax1,az1,
+								(float)layer,anchorTopOffset);
 					if (worldHeight>1 && topPatch>=0)
-						AdvancedPatchFaceRange(topPatch,false,ax0,az0,ax1,az1,
-							(float)worldHeight-1.0f,(float)worldHeight);
+						AdvancedPatchFaceLayer(topPatch,false,ax0,az0,ax1,az1,
+							(float)worldHeight-1.0f,anchorTopOffset);
 				}
 			}
 	/* Sprites remain classic camera-facing artwork, now placed in the true
@@ -1243,7 +1345,8 @@ void AdvancedRendererDrawWorld(const word *tiles,const byte *specialOrientation,
 		{
 			int cell=x*mapsize+y;
 			word wall=tiles[cell];
-			if (wall && !(wall&0x8000))
+			if (wall && !(wall&0x8000) &&
+				AdvancedTileVisible(visibleTiles,mapsize,x,y))
 			{
 				AdvancedSetTileLight(lightLevels,mapsize,x,y,
 					lightingEnabled,darkAmbient,coloredLights);
@@ -1254,7 +1357,8 @@ void AdvancedRendererDrawWorld(const word *tiles,const byte *specialOrientation,
 		}
 	for (x=minx;x<=maxx;x++)
 		for (y=miny;y<=maxy;y++)
-			if (tiles[x*mapsize+y]==0 || (tiles[x*mapsize+y]&0x8000))
+			if (AdvancedTileVisible(visibleTiles,mapsize,x,y) &&
+				(tiles[x*mapsize+y]==0 || (tiles[x*mapsize+y]&0x8000)))
 			{
 				float x0=(float)x,x1=x0+1.0f;
 				float z0=(float)-y,z1=z0-1.0f;
@@ -1290,6 +1394,8 @@ void AdvancedRendererDrawWorld(const word *tiles,const byte *specialOrientation,
 	if (movingWallX && movingWallY && movingWallTexture)
 		for (x=0;x<movingWallCount;x++)
 		{
+			if (!AdvancedTileVisible(visibleTiles,mapsize,
+				(int)movingWallX[x],(int)movingWallY[x])) continue;
 			float x0=movingWallX[x]-.5f,x1=movingWallX[x]+.5f;
 			float z0=-movingWallY[x]+.5f,z1=-movingWallY[x]-.5f;
 			AdvancedSetTileLight(lightLevels,mapsize,(int)movingWallX[x],
@@ -1374,6 +1480,9 @@ void GraphicsMode ( void )
     Uint32 flags = 0;
     Uint32 rendererFlags = SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC;
 	advancedGpuRenderer=(CheckParm("advancedrenderer")!=0);
+	advancedCaptureRequested=(CheckParm("advancedcapture")!=0);
+	advancedCaptureSequence=(CheckParm("advancedcapturesequence")!=0);
+	classicCaptureRequested=(CheckParm("classiccapture")!=0);
 
 	if (SDL_InitSubSystem (SDL_INIT_VIDEO | SDL_INIT_AUDIO) < 0)
 	{
@@ -1480,11 +1589,105 @@ static void UpdateScreenTexture(void)
     SDL_UnlockTexture(sdl_texture);
 }
 
+static void CaptureAdvancedFrame(void)
+{
+	SDL_Surface *capture;
+	byte *scratch;
+	char filename[64];
+	int width,height,y;
+	Uint32 now=SDL_GetTicks();
+
+	if ((!advancedCaptureRequested && !advancedCaptureSequence) ||
+		advancedCaptureSaved || !sdl_window)
+		return;
+	if (advancedCaptureSequence)
+	{
+		if (advancedCaptureSequenceCount>=12 ||
+			(advancedCaptureSequenceCount>0 && now<advancedCaptureSequenceNext))
+			return;
+		snprintf(filename,sizeof(filename),"advanced-render-capture-%02d.bmp",
+			advancedCaptureSequenceCount);
+	}
+	else
+	{
+		int probeParm=CheckParm("advancedprobecamera");
+		if (probeParm && probeParm+4<_argc)
+			snprintf(filename,sizeof(filename),"advanced-probe-%s-%s-%s-%s.bmp",
+				_argv[probeParm+1],_argv[probeParm+2],
+				_argv[probeParm+3],_argv[probeParm+4]);
+		else
+			strcpy(filename,"advanced-render-capture.bmp");
+	}
+	SDL_GL_GetDrawableSize(sdl_window,&width,&height);
+	if (width<1 || height<1)
+		return;
+	capture=SDL_CreateRGBSurfaceWithFormat(0,width,height,32,
+		SDL_PIXELFORMAT_RGBA32);
+	if (!capture)
+		return;
+	glPixelStorei(GL_PACK_ALIGNMENT,4);
+	glReadBuffer(GL_BACK);
+	glReadPixels(0,0,width,height,GL_RGBA,GL_UNSIGNED_BYTE,capture->pixels);
+	scratch=(byte *)malloc((size_t)capture->pitch);
+	if (scratch)
+	{
+		for (y=0;y<height/2;y++)
+		{
+			byte *topRow=(byte *)capture->pixels+y*capture->pitch;
+			byte *bottomRow=(byte *)capture->pixels+(height-1-y)*capture->pitch;
+			memcpy(scratch,topRow,(size_t)capture->pitch);
+			memcpy(topRow,bottomRow,(size_t)capture->pitch);
+			memcpy(bottomRow,scratch,(size_t)capture->pitch);
+		}
+		free(scratch);
+		if (SDL_SaveBMP(capture,filename)==0)
+		{
+			if (advancedCaptureSequence)
+			{
+				advancedCaptureSequenceCount++;
+				advancedCaptureSequenceNext=now+1500;
+			}
+			else
+				advancedCaptureSaved=true;
+		}
+	}
+	SDL_FreeSurface(capture);
+}
+
+static void CaptureClassicFrame(void)
+{
+	extern bool ingame;
+	char filename[64];
+	int probeParm;
+
+	/* Menus and loading cards use the same presentation path as the game.
+	   Wait for an actual un-stretched gameplay frame so deterministic probes
+	   cannot accidentally photograph the Area loading screen. */
+	if (!classicCaptureRequested || classicCaptureSaved || !sdl_surface ||
+		!classicWorldFrameReady || !ingame || StretchScreen)
+		return;
+	probeParm=CheckParm("advancedprobecamera");
+	if (probeParm && probeParm+4<_argc)
+		snprintf(filename,sizeof(filename),"classic-probe-%s-%s-%s-%s.bmp",
+			_argv[probeParm+1],_argv[probeParm+2],
+			_argv[probeParm+3],_argv[probeParm+4]);
+	else
+		strcpy(filename,"classic-render-capture.bmp");
+	if (SDL_SaveBMP(sdl_surface,filename)==0)
+		classicCaptureSaved=true;
+}
+
+void ClassicCaptureWorldFrameReady(void)
+{
+	classicWorldFrameReady=true;
+}
+
 static void PresentAdvancedScreen(void)
 {
 	int width,height;
 	if (advancedWorldReady)
 	{
+		CaptureAdvancedFrame();
 		SDL_GL_SwapWindow(sdl_window);
 		advancedWorldReady=false;
 		return;
@@ -1818,6 +2021,7 @@ void VH_UpdateScreen (void)
 		PresentAdvancedScreen();
 	else
 	{
+		CaptureClassicFrame();
 		UpdateScreenTexture();
 		SDL_RenderClear(sdl_renderer);
 		SDL_RenderCopy(sdl_renderer, sdl_texture, NULL, NULL);
@@ -1861,6 +2065,7 @@ void XFlipPage ( void )
 		PresentAdvancedScreen();
 	else
 	{
+		CaptureClassicFrame();
 		UpdateScreenTexture();
 		SDL_RenderClear(sdl_renderer);
 		SDL_RenderCopy(sdl_renderer, sdl_texture, NULL, NULL);
