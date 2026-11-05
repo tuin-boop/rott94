@@ -94,7 +94,7 @@ smoke test from the repository root:
 .\tools\test-advanced-renderer.ps1
 ```
 
-The test captures 13 matched classic/advanced views covering all four compass
+The test captures 15 matched classic/advanced views covering all four compass
 directions, steep vertical look, indoor and outdoor spaces, masked walls,
 actors, and the late corridor. It also compares an Area 1 door while closed,
 half-open, and fully open, verifies that the advanced flashlight changes the
