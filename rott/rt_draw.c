@@ -3642,7 +3642,27 @@ void      ThreeDRefresh (void)
          &gpuWeaponX,&gpuWeaponY);
       AdvancedRendererPrepareHud();
       if (SHOW_PLAYER_STATS())
+         {
+         int savedHealthX=iGLOBAL_HEALTH_X;
+         int savedHealthY=iGLOBAL_HEALTH_Y;
+         int savedAmmoX=iGLOBAL_AMMO_X;
+         int savedAmmoY=iGLOBAL_AMMO_Y;
+         /* The native OpenGL world is independent of the legacy software
+            surface.  Compose status artwork in its original 320x200
+            coordinate system, then let AdvancedHudOverlay scale it once. */
+         if (iGLOBAL_SCREENWIDTH>800)
+            {
+            iGLOBAL_HEALTH_X=20;
+            iGLOBAL_HEALTH_Y=185;
+            iGLOBAL_AMMO_X=300;
+            iGLOBAL_AMMO_Y=184;
+            }
          DrawStats();
+         iGLOBAL_HEALTH_X=savedHealthX;
+         iGLOBAL_HEALTH_Y=savedHealthY;
+         iGLOBAL_AMMO_X=savedAmmoX;
+         iGLOBAL_AMMO_Y=savedAmmoY;
+         }
       AdvancedRendererDrawWorld(&tilemap[0][0],specialOrientation,
          specialTexture,specialAltTexture,specialSideTexture,specialPatches,
          &spotvis[0][0],

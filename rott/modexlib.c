@@ -463,6 +463,10 @@ static GLuint advancedHudTexture = 0;
 static uint32_t *advancedHudPixels = NULL;
 static int advancedHudWidth = 0;
 static int advancedHudHeight = 0;
+#define ADVANCED_HUD_WIDTH 320
+#define ADVANCED_HUD_HEIGHT 200
+#define ADVANCED_HUD_STATS_Y 184
+#define ADVANCED_HUD_STATS_HEIGHT 16
 static const byte *advancedFloorSource = NULL;
 static const byte *advancedCeilingSource = NULL;
 static int advancedSkyTextureRevision = -1;
@@ -482,36 +486,66 @@ extern byte *colormap;
 
 void AdvancedRendererPrepareHud(void)
 {
-	int y,band;
+	int x,y,band;
 	byte *pixels;
 	if (!advancedGpuRenderer || !sdl_surface || !sdl_surface->pixels)
 		return;
-	band=iGLOBAL_SCREENHEIGHT<40 ? iGLOBAL_SCREENHEIGHT : 40;
 	pixels=(byte *)sdl_surface->pixels;
+	if (iGLOBAL_SCREENWIDTH>800 && iGLOBAL_SCREENHEIGHT>=ADVANCED_HUD_HEIGHT)
+	{
+		/* Native rendering keeps the DOS status artwork in a small logical
+		   320x200 layer.  Clear only its transparent stats strip; the OpenGL
+		   world never needs to occupy these software-surface pixels. */
+		x=iGLOBAL_SCREENWIDTH<ADVANCED_HUD_WIDTH ?
+			iGLOBAL_SCREENWIDTH : ADVANCED_HUD_WIDTH;
+		for (y=ADVANCED_HUD_STATS_Y;
+			y<ADVANCED_HUD_STATS_Y+ADVANCED_HUD_STATS_HEIGHT;y++)
+			memset(pixels+y*sdl_surface->pitch,255,(size_t)x);
+		return;
+	}
+	band=iGLOBAL_SCREENHEIGHT<40 ? iGLOBAL_SCREENHEIGHT : 40;
 	for (y=iGLOBAL_SCREENHEIGHT-band;y<iGLOBAL_SCREENHEIGHT;y++)
 		memset(pixels+y*sdl_surface->pitch,255,(size_t)iGLOBAL_SCREENWIDTH);
 }
 
 static void AdvancedHudOverlay(int drawableWidth,int drawableHeight)
 {
-	int x,y,topBand,bottomBand,band;
+	int x,y,sourceWidth,sourceBottom,logicalHeight,topBand,bottomBand,band;
 	byte *source;
 	SDL_Palette *palette;
 	float top,topV;
 	if (!sdl_surface || !sdl_surface->pixels ||
 		!sdl_surface->format->palette) return;
-	topBand=iGLOBAL_SCREENHEIGHT<16 ? iGLOBAL_SCREENHEIGHT : 16;
-	bottomBand=iGLOBAL_SCREENHEIGHT-topBand<40 ?
-		iGLOBAL_SCREENHEIGHT-topBand : 40;
+	if (iGLOBAL_SCREENWIDTH>800 && iGLOBAL_SCREENHEIGHT>=ADVANCED_HUD_HEIGHT)
+	{
+		/* Draw the native corner stats at the same apparent size and placement
+		   as the original 320x200 HUD.  In particular, do not copy the first
+		   16 native rows: native view sizes do not have a top status bar. */
+		sourceWidth=ADVANCED_HUD_WIDTH;
+		sourceBottom=ADVANCED_HUD_STATS_Y;
+		logicalHeight=ADVANCED_HUD_HEIGHT;
+		topBand=0;
+		bottomBand=ADVANCED_HUD_STATS_HEIGHT;
+	}
+	else
+	{
+		sourceWidth=iGLOBAL_SCREENWIDTH;
+		logicalHeight=iGLOBAL_SCREENHEIGHT;
+		topBand=iGLOBAL_SCREENHEIGHT<16 ? iGLOBAL_SCREENHEIGHT : 16;
+		bottomBand=iGLOBAL_SCREENHEIGHT-topBand<40 ?
+			iGLOBAL_SCREENHEIGHT-topBand : 40;
+		sourceBottom=iGLOBAL_SCREENHEIGHT-bottomBand;
+	}
 	band=topBand+bottomBand;
-	if (!advancedHudPixels || advancedHudWidth!=iGLOBAL_SCREENWIDTH ||
+	if (!band) return;
+	if (!advancedHudPixels || advancedHudWidth!=sourceWidth ||
 		advancedHudHeight!=band)
 	{
 		free(advancedHudPixels);
-		advancedHudPixels=(uint32_t *)malloc((size_t)iGLOBAL_SCREENWIDTH*
+		advancedHudPixels=(uint32_t *)malloc((size_t)sourceWidth*
 			(size_t)band*sizeof(uint32_t));
 		if (!advancedHudPixels) return;
-		advancedHudWidth=iGLOBAL_SCREENWIDTH;
+		advancedHudWidth=sourceWidth;
 		advancedHudHeight=band;
 		if (advancedHudTexture) glDeleteTextures(1,&advancedHudTexture);
 		advancedHudTexture=0;
@@ -520,16 +554,16 @@ static void AdvancedHudOverlay(int drawableWidth,int drawableHeight)
 	for (y=0;y<band;y++)
 	{
 		source=(byte *)sdl_surface->pixels+
-			(y<topBand ? y : iGLOBAL_SCREENHEIGHT-bottomBand+y-topBand)*
+			(y<topBand ? y : sourceBottom+y-topBand)*
 			sdl_surface->pitch;
-		for (x=0;x<iGLOBAL_SCREENWIDTH;x++)
+		for (x=0;x<sourceWidth;x++)
 		{
 			byte index=source[x];
-			if (index==255) advancedHudPixels[y*iGLOBAL_SCREENWIDTH+x]=0;
+			if (index==255) advancedHudPixels[y*sourceWidth+x]=0;
 			else
 			{
 				SDL_Color c=palette->colors[index];
-				advancedHudPixels[y*iGLOBAL_SCREENWIDTH+x]=0xff000000u|
+				advancedHudPixels[y*sourceWidth+x]=0xff000000u|
 					((uint32_t)c.r<<16)|((uint32_t)c.g<<8)|c.b;
 			}
 		}
@@ -542,16 +576,16 @@ static void AdvancedHudOverlay(int drawableWidth,int drawableHeight)
 		glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_NEAREST);
 		glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP);
 		glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_CLAMP);
-		glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA,iGLOBAL_SCREENWIDTH,band,0,
+		glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA,sourceWidth,band,0,
 			GL_BGRA,GL_UNSIGNED_BYTE,advancedHudPixels);
 	}
 	else
 	{
 		glBindTexture(GL_TEXTURE_2D,advancedHudTexture);
-		glTexSubImage2D(GL_TEXTURE_2D,0,0,0,iGLOBAL_SCREENWIDTH,band,
+		glTexSubImage2D(GL_TEXTURE_2D,0,0,0,sourceWidth,band,
 			GL_BGRA,GL_UNSIGNED_BYTE,advancedHudPixels);
 	}
-	top=1.0f-(float)bottomBand/(float)iGLOBAL_SCREENHEIGHT;
+	top=1.0f-(float)bottomBand/(float)logicalHeight;
 	topV=(float)topBand/(float)band;
 	glEnable(GL_TEXTURE_2D);
 	glEnable(GL_ALPHA_TEST);
@@ -560,8 +594,8 @@ static void AdvancedHudOverlay(int drawableWidth,int drawableHeight)
 	glBegin(GL_QUADS);
 	glTexCoord2f(0,0); glVertex2f(0,0);
 	glTexCoord2f(1,0); glVertex2f(1,0);
-	glTexCoord2f(1,topV); glVertex2f(1,(float)topBand/iGLOBAL_SCREENHEIGHT);
-	glTexCoord2f(0,topV); glVertex2f(0,(float)topBand/iGLOBAL_SCREENHEIGHT);
+	glTexCoord2f(1,topV); glVertex2f(1,(float)topBand/logicalHeight);
+	glTexCoord2f(0,topV); glVertex2f(0,(float)topBand/logicalHeight);
 	glTexCoord2f(0,topV); glVertex2f(0,top);
 	glTexCoord2f(1,topV); glVertex2f(1,top);
 	glTexCoord2f(1,1); glVertex2f(1,1);
