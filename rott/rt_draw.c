@@ -3250,35 +3250,46 @@ void      ThreeDRefresh (void)
                }
          }
       }
-      {
-      int diskProbeParm=CheckParm("advanceddiskprobe");
-      if (diskProbeParm && diskProbeParm+3<_argc)
-         {
-         int diskX=ParseNum(_argv[diskProbeParm+1]);
-         int diskY=ParseNum(_argv[diskProbeParm+2]);
-         int diskZ=ParseNum(_argv[diskProbeParm+3]);
-         objtype *disk;
-         objtype *targetDisk=NULL;
-         if (diskZ<0) diskZ=0;
-         if (diskZ>nominalheight) diskZ=nominalheight;
-         for (disk=FIRSTACTOR;disk;disk=disk->next)
-            if (disk->obclass==diskobj)
-               {
-               if (disk->tilex==diskX && disk->tiley==diskY)
-                  targetDisk=disk;
-               else
-                  disk->shapenum=NOTHING;
-               }
-         if (targetDisk)
-            {
-            targetDisk->z=diskZ;
-            targetDisk->momentumz=0;
-            targetDisk->drawx=targetDisk->x;
-            targetDisk->drawy=targetDisk->y;
-            }
-         }
-      }
       renderProbeConfigured=true;
+      }
+   }
+
+   /* Moving lift actors resume their normal thinker immediately after the
+      one-time probe setup.  Re-pin the selected lift on every captured frame
+      so classic and advanced screenshots compare the requested height rather
+      than two timing-dependent points in its travel. */
+   {
+   int diskProbeParm=CheckParm("advanceddiskprobe");
+   if (diskProbeParm && diskProbeParm+3<_argc)
+      {
+      int diskX=ParseNum(_argv[diskProbeParm+1]);
+      int diskY=ParseNum(_argv[diskProbeParm+2]);
+      int diskZ=ParseNum(_argv[diskProbeParm+3]);
+      objtype *disk;
+      statobj_t *diskStat;
+      if (diskZ<0) diskZ=0;
+      if (diskZ>nominalheight) diskZ=nominalheight;
+      for (disk=FIRSTACTOR;disk;disk=disk->next)
+         if (disk->obclass==diskobj)
+            {
+            if (disk->tilex==diskX && disk->tiley==diskY)
+               {
+               disk->z=diskZ;
+               disk->momentumz=0;
+               disk->drawx=disk->x;
+               disk->drawy=disk->y;
+               }
+            else
+               disk->shapenum=NOTHING;
+            }
+      for (diskStat=FIRSTSTAT;diskStat;diskStat=diskStat->statnext)
+         if (diskStat->itemnumber==stat_disk)
+            {
+            if (diskStat->tilex==diskX && diskStat->tiley==diskY)
+               diskStat->z=diskZ;
+            else
+               diskStat->shapenum=NOTHING;
+            }
       }
    }
 
@@ -3564,7 +3575,8 @@ void      ThreeDRefresh (void)
             AdvancedInterpolatePosition(gpuStat,
                (float)gpuStat->x/(float)TILEGLOBAL,
                (float)gpuStat->y/(float)TILEGLOBAL,
-               (float)(nominalheight-gpuStat->z)/64.0f,
+               (float)(((gpuStat->itemnumber==stat_disk ? levelheight*64 :
+                  nominalheight)-gpuStat->z))/64.0f,
                &gpuSpriteX[gpuSpriteCount],&gpuSpriteY[gpuSpriteCount],
                &gpuSpriteZ[gpuSpriteCount]);
             gpuSpriteLump[gpuSpriteCount]=lump;
@@ -3604,7 +3616,8 @@ void      ThreeDRefresh (void)
             AdvancedInterpolatePosition(gpuActor,
                (float)gpuActor->x/(float)TILEGLOBAL,
                (float)gpuActor->y/(float)TILEGLOBAL,
-               (float)(nominalheight-gpuActor->z)/64.0f,
+               (float)(((gpuActor->obclass==diskobj ? levelheight*64 :
+                  nominalheight)-gpuActor->z))/64.0f,
                &gpuSpriteX[gpuSpriteCount],&gpuSpriteY[gpuSpriteCount],
                &gpuSpriteZ[gpuSpriteCount]);
             gpuSpriteLump[gpuSpriteCount]=lump;

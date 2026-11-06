@@ -216,6 +216,22 @@ foreach ($renderer in 'classic', 'advanced') {
     }
 }
 
+# Three adjacent static lifts exercise the classic near-plane edge case: the
+# closest is behind the camera, the next is entirely above the viewport, and
+# the farthest is only partly visible at the ceiling.  This caught a one-tile
+# vertical-baseline mismatch that the moving lift alone could not isolate.
+$staticDiskXs = @(16, 17, 18)
+foreach ($staticDiskX in $staticDiskXs) {
+    $diskTag = "static-disk-$staticDiskX-71-64"
+    $diskArguments = @('-advanceddiskprobe', "$staticDiskX", '71', '64')
+    $classicDiskCapture = Invoke-RendererCapture 'classic' @(16, 72, 0, 0) `
+        $diskArguments $diskTag
+    $advancedDiskCapture = Invoke-RendererCapture 'advanced' @(16, 72, 0, 0) `
+        $diskArguments $diskTag
+    $captures.Add($classicDiskCapture)
+    $captures.Add($advancedDiskCapture)
+}
+
 # The flashlight is an advanced-renderer feature, so verify that enabling it
 # materially changes the same deterministic view in Area 1's darker door room.
 $flashlightProbe = @(18, 73, 90, 0)
@@ -272,6 +288,15 @@ if (-not $SkipMontage) {
             if ($LASTEXITCODE -ne 0) { throw "ImageMagick failed while making $row" }
             $rowFiles.Add($row)
         }
+        foreach ($staticDiskX in $staticDiskXs) {
+            $diskTag = "static-disk-$staticDiskX-71-64"
+            $classic = Join-Path $runtimeDir "classic-$diskTag.bmp"
+            $advanced = Join-Path $runtimeDir "advanced-$diskTag.bmp"
+            $row = Join-Path $runtimeDir "renderer-test-$diskTag.png"
+            & $magick.Source $classic -resize '480x270!' $advanced -resize '480x270!' +append $row
+            if ($LASTEXITCODE -ne 0) { throw "ImageMagick failed while making $row" }
+            $rowFiles.Add($row)
+        }
         $montage = Join-Path $runtimeDir 'renderer-regression-montage.png'
         & $magick.Source @rowFiles -append $montage
         if ($LASTEXITCODE -ne 0) { throw 'ImageMagick failed while making the renderer montage' }
@@ -284,6 +309,7 @@ $result = [pscustomobject]@{
     ProbePairs = $probes.Count
     DoorStatePairs = $doorStates.Count * $doorProbes.Count
     DiskStatePairs = $diskStates.Count
+    StaticDiskPairs = $staticDiskXs.Count
     FlashlightCaptures = 2
     Captures = $captures.Count
     DemoResults = $demoResults
