@@ -98,6 +98,7 @@ extern bool pickquick;
 extern cfont_t *IFont;
 extern font_t *CurrentFont;
 extern font_t *tinyfont;
+extern font_t *tuinfont;
 
 //
 // Global window coords
@@ -146,7 +147,6 @@ typedef enum
    loadgame,
    savegame,
    control,
-   orderinfo,
    viewscores,
    backtodemo,
    quit

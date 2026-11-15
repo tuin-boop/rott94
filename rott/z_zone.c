@@ -145,14 +145,29 @@ void Z_Init (int size, int min)
       return;
    zonememorystarted=1;
 
-   sz = GamePacketSize();
-
-   sz*=MAXCMDS;
-
-   if (ConsoleIsServer() == true)
-      levelzonesize+=((numplayers*2)+1)*sz;
+   /* The Windows UDP connection is intentionally deferred until the video
+      window exists, so at this point numplayers and ConsoleIsServer() still
+      describe a one-player game.  The original calculation consequently
+      under-allocated the level arena and the host ran out of memory on the
+      final 52-byte level object.  Reserve the worst supported network command
+      footprint when -net is present; it is small on modern systems and also
+      leaves enough room for five-player co-op. */
+#if defined(PLATFORM_WIN32)
+   if (CheckParm("net"))
+      {
+      sz = GetTypeSize(COM_SOUNDANDDELTA) * MAXCMDS;
+      levelzonesize += ((MAXPLAYERS*2)+1) * sz;
+      }
    else
-      levelzonesize+=(numplayers+1)*sz;
+#endif
+      {
+      sz = GamePacketSize() * MAXCMDS;
+
+      if (ConsoleIsServer() == true)
+         levelzonesize+=((numplayers*2)+1)*sz;
+      else
+         levelzonesize+=(numplayers+1)*sz;
+      }
 
    maxsize=((int)(Z_AvailHeap())-size-levelzonesize);
    if (maxsize<min)

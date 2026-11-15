@@ -40,6 +40,19 @@ extern int controlsynctime;
 //#define consoleplayer (rottcom->consoleplayer)
 
 void InitROTTNET (void);
+void ROTT_ShutdownNetwork(void);
+const char *ROTT_GetLanAddress(void);
+
+#define ROTT_MAX_LAN_GAMES 8
+typedef struct
+   {
+   char address[64];
+   int players;
+   int connected;
+   int id;
+   } rott_lan_game_t;
+
+int ROTT_DiscoverLanGames(rott_lan_game_t *games,int maxgames,int timeoutms);
 bool ReadPacket (void);
 void WritePacket (void * buffer, int len, int destination);
 void ComSetTime (void);

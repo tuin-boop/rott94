@@ -32,6 +32,17 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include <string.h>
 #include <ctype.h>
 
+#if PLATFORM_WIN32
+#include <process.h>
+/* Keep winuser.h out of this legacy module: ROTT has its own MSG,
+   ShowCursor, and GetMenuInfo symbols.  These two kernel calls are all the
+   child-process health check needs. */
+__declspec(dllimport) unsigned long __stdcall WaitForSingleObject(void *,
+   unsigned long);
+__declspec(dllimport) int __stdcall CloseHandle(void *);
+#define ROTT_WAIT_OBJECT_0 0UL
+#endif
+
 #if PLATFORM_DOS
 #include <conio.h>
 #include <dos.h>
@@ -129,6 +140,7 @@ font_t  *newfont1;
 font_t  *smallfont;
 font_t  *bigfont;
 font_t  *tinyfont;
+font_t  *tuinfont;
 
 bool loadedgame = false;
 
@@ -376,20 +388,24 @@ char *colorname[] =
 //
 // MENU ITEMS
 //
+static void CP_LanMultiplayer(int unused);
+static void CP_LanHostMenu(int unused);
+static void CP_LanJoin(int unused);
+static void CP_StartLanHost(int unused);
+
 CP_MenuNames MainMenuNames[] =
    {
    "NEW GAME",
-   "COMM-BAT� GAME",
-   "RESTORE GAME",
+   "MULTIPLAYER / CO-OP",
+   "LOAD GAME",
    "SAVE GAME",
    "OPTIONS",
-   "ORDERING INFO",
-   "VIEW SCORES", //"END GAME"
-   "BACK TO DEMO", //"BACK TO GAME"
+   "SCORES", //"END GAME"
+   "BACK", //"BACK TO GAME"
    "QUIT"
    };
 
-CP_iteminfo MainItems  = { MENU_X, MENU_Y + 1, 9, STARTITEM, 32, MainMenuNames, mn_largefont };
+CP_iteminfo MainItems  = { 18, 38, 8, STARTITEM, 12, MainMenuNames, mn_largefont };
 CP_itemtype MainMenu[] =
    {
       { CP_CursorLocation, "mm_opt1\0",  'N', (menuptr)CP_NewGame },
@@ -401,12 +417,11 @@ CP_itemtype MainMenu[] =
 #endif
 		  "battle\0",
 		  'C',
-		  (menuptr)CP_BattleModes
+		  (menuptr)CP_LanMultiplayer
 	  },
       { CP_Active,         "mm_opt2\0",  'R', (menuptr)CP_LoadGame },
       { CP_Inactive,       "mm_opt3\0",  'S', (menuptr)CP_SaveGame },
       { CP_Active,         "mm_opt5\0",  'O', (menuptr)CP_ControlMenu },
-      { CP_Active,         "ordrinfo\0", 'O', (menuptr)CP_OrderInfo },
       { CP_Active,         "mm_opt7\0",  'V', (menuptr)CP_ViewScores },
       { CP_Active,         "mm_opt8\0",  'B', (menuptr)NULL },
       {
@@ -419,6 +434,40 @@ CP_itemtype MainMenu[] =
 		  'Q',
 		  (menuptr)CP_Quit
 	  }
+   };
+
+CP_MenuNames LanMenuNames[] =
+   {
+   "HOST LAN GAME",
+   "JOIN LAN GAME",
+   "OTHER BATTLE MODES"
+   };
+
+CP_iteminfo LanItems = { 18, 48, 3, 0, 12, LanMenuNames, mn_largefont };
+
+CP_itemtype LanMenu[] =
+   {
+   { CP_CursorLocation, "lanhost\0", 'H', (menuptr)CP_LanHostMenu },
+   { CP_Active,         "lanjoin\0", 'J', (menuptr)CP_LanJoin },
+   { CP_Active,         "battle\0",  'O', (menuptr)CP_BattleModes }
+   };
+
+CP_MenuNames LanHostNames[] =
+   {
+   "2 PLAYERS",
+   "3 PLAYERS",
+   "4 PLAYERS",
+   "5 PLAYERS"
+   };
+
+CP_iteminfo LanHostItems = { 18, 48, 4, 0, 12, LanHostNames, mn_largefont };
+
+CP_itemtype LanHostMenu[] =
+   {
+   { CP_CursorLocation, "lan2\0", '2', (menuptr)CP_StartLanHost },
+   { CP_Active,         "lan3\0", '3', (menuptr)CP_StartLanHost },
+   { CP_Active,         "lan4\0", '4', (menuptr)CP_StartLanHost },
+   { CP_Active,         "lan5\0", '5', (menuptr)CP_StartLanHost }
    };
 
 
@@ -531,17 +580,15 @@ CP_itemtype TufMenu[ 4 ][ 7 ] =
 CP_MenuNames CustomMenuNames[] =
    {
    "CUSTOMIZE KEYBOARD",
-   "CUSTOMIZE MOUSE",
-   "CUSTOMIZE JOYSTICK"
+   "CUSTOMIZE MOUSE"
    };
 
-CP_iteminfo CustomItems = {32, 64, 3, 0, 24, CustomMenuNames, mn_largefont };
+CP_iteminfo CustomItems = {32, 64, 2, 0, 24, CustomMenuNames, mn_largefont };
 
 CP_itemtype CustomMenu[] =
 {
   {2, "custom1\0", 'C', (menuptr)CP_Keyboard},
-  {1, "custom2\0", 'C', (menuptr)CP_Mouse},
-  {1, "custom3\0", 'C', (menuptr)CP_Joystick}
+  {1, "custom2\0", 'C', (menuptr)CP_Mouse}
 };
 
 #define KEYNAMEINDEX 21
@@ -737,7 +784,7 @@ CP_itemtype PlayerMenu[] =
 
 CP_MenuNames ControlMMenuNames[] =
    {
-   "CONTROLS",
+   "KEYS & MOUSE",
    "USER OPTIONS",
    "EXT USER OPTIONS",//bna added
    "ADVANCED OPTIONS",
@@ -750,7 +797,7 @@ CP_iteminfo ControlMItems = {32, 48-14, 6, 0, 32, ControlMMenuNames, mn_largefon
 
 CP_itemtype ControlMMenu[] =
 {
-   {2, "cntl\0",     'C', (menuptr)CP_Control},
+   {2, "cntl\0",     'K', (menuptr)CP_Custom},
    {1, "uopt\0",     'U', (menuptr)CP_OptionsMenu},
    {1, "euopt\0", 'E', (menuptr)CP_ExtOptionsMenu},//bna added
    {1, "advopt\0", 'A', (menuptr)CP_AdvancedOptionsMenu},
@@ -1356,6 +1403,36 @@ void MN_MakeActive
 // Purpose - Draws a menu
 //
 //******************************************************************************
+static bool UseTuinMenuFont(CP_iteminfo *item_i)
+{
+   /* Tiny-font menus contain fixed columns and control characters (notably
+      the keyboard binding separator).  The proportional Tuin font turns
+      those padding bytes into wide solid glyphs, so retain the native font
+      for those dense utility screens. */
+   return tuinfont && item_i && item_i->names &&
+      item_i->fontsize!=mn_tinyfont;
+}
+
+static void DrawTuinMenuEntry(CP_iteminfo *item_i,CP_itemtype *items,
+   int which,bool selected)
+{
+   int posx=item_i->x+item_i->indent;
+   int posy=item_i->y+which*FontSize[item_i->fontsize];
+   int barwidth=276-posx;
+   int rowheight=FontSize[item_i->fontsize];
+   int eraseheight=tuinfont->height+2;
+   byte textcolor=235;
+
+   if (barwidth>230) barwidth=230;
+   if (barwidth<40) barwidth=40;
+   if (eraseheight<9) eraseheight=9;
+   if (eraseheight>rowheight) eraseheight=rowheight;
+   EraseMenuBufRegion(posx-5,posy-2,barwidth,eraseheight);
+   if (selected)
+      FillMenuBufRect(posx-5,posy-2,barwidth,eraseheight,254);
+   DrawMenuBufFontString(posx,posy,item_i->names[which],tuinfont,textcolor);
+}
+
 void DrawMenu
    (
    CP_iteminfo *item_i,
@@ -1414,13 +1491,19 @@ void DrawMenu
             }
          else
             {
-            IFont = ( cfont_t * )W_CacheLumpName( FontNames[ item_i->fontsize ],
-               PU_CACHE, Cvt_cfont_t, 1 );
-            if ( item_i->fontsize == mn_tinyfont )
+            if (UseTuinMenuFont(item_i))
                {
-               DrawMenuBufIString( posx + 1, posy, item_i->names[ i ], 0 );
+               DrawTuinMenuEntry(item_i,items,i,
+                  active==CP_CursorLocation);
                }
-            DrawMenuBufIString( posx, posy - 1, item_i->names[ i ], color );
+            else
+               {
+               IFont = ( cfont_t * )W_CacheLumpName( FontNames[ item_i->fontsize ],
+                  PU_CACHE, Cvt_cfont_t, 1 );
+               if ( item_i->fontsize == mn_tinyfont )
+                  DrawMenuBufIString( posx + 1, posy, item_i->names[ i ], 0 );
+               DrawMenuBufIString( posx, posy - 1, item_i->names[ i ], color );
+               }
             }
          }
       }
@@ -1979,7 +2062,7 @@ void DrawMainMenu(void)
       }
 
    MN_GetCursorLocation( &MainItems, &MainMenu[ 0 ] );
-   SetMenuTitle ("Main Menu");
+   SetMenuTitle ("ROTTENHANCED - TUIN EDITION");
    DrawMenu (&MainItems, &MainMenu[0]);
 
 	numdone ++;
@@ -2052,7 +2135,7 @@ int HandleMenu (CP_iteminfo *item_i, CP_itemtype *items, void (*routine)(int w))
       y = CUSTOM_y[handlewhich];
 
 
-   if (MenuNum != 5)
+   if ((!UseTuinMenuFont(item_i)) && (MenuNum != 5))
       DrawMenuBufItem (x, y, W_GetNumForName( CursorLump ) +
          CursorFrame[ CursorNum ] );
 
@@ -2071,7 +2154,8 @@ int HandleMenu (CP_iteminfo *item_i, CP_itemtype *items, void (*routine)(int w))
       ReadAnyControl (&ci);
       RefreshMenuBuf (0);
      // Change Cursor Shape
-      if ((GetTicCount() > (timer+count)) && (MenuNum != 5))
+      if ((!UseTuinMenuFont(item_i)) &&
+         (GetTicCount() > (timer+count)) && (MenuNum != 5))
       {
          timer = GetTicCount();
 
@@ -2461,6 +2545,15 @@ void HideCursor
    int posx;
    int posy;
 
+   if (UseTuinMenuFont(item_i))
+      {
+      DrawTuinMenuEntry(item_i,items,which,false);
+      if ((items[which].active != CP_Inactive) &&
+         (items[which].active != CP_SemiActive))
+         items[which].active=CP_Active;
+      return;
+      }
+
    if ( MenuNum != 5 )
       {
 		EraseMenuBufRegion( x, y, cursorwidth, cursorheight );
@@ -2536,7 +2629,7 @@ void HideCursor
 void DrawHalfStep (int x, int y)
 {
    MN_PlayMenuSnd (SD_MOVECURSORSND);
-   if (MenuNum == 5)
+   if (tuinfont || MenuNum == 5)
       return;
 
    DrawMenuBufItem (x, y, W_GetNumForName( CursorLump ) +
@@ -2586,6 +2679,15 @@ void ShowCursor
    int delay;
    int posx;
    int posy;
+
+   if (UseTuinMenuFont(item_i))
+      {
+      *y=basey+which*yinc;
+      DrawTuinMenuEntry(item_i,items,which,true);
+      if (items[which].active != CP_SemiActive)
+         items[which].active=CP_CursorLocation;
+      return;
+      }
 
    if ( MenuNum )
       {
@@ -5064,6 +5166,9 @@ void DisplayInfo (int which)
    int x;
    int num;
 
+   if (tuinfont)
+      return;
+
    num = W_GetNumForName ( "info1" ) + which;
    p = (patch_t *) W_CacheLumpNum (num, PU_CACHE, Cvt_patch_t, 1);
 
@@ -5110,8 +5215,9 @@ void DoMainMenu (void)
    SetAlternateMenuBuf();
    ClearMenuBuf();
    DrawMainMenu();
-	DrawMenuBufItem (MainItems.x,  ((MainItems.curpos*14)+(MainItems.y-2)),
-                  W_GetNumForName( LargeCursor ) + CursorFrame[ CursorNum ] );
+	if (!tuinfont)
+	   DrawMenuBufItem (MainItems.x,((MainItems.curpos*14)+(MainItems.y-2)),
+	      W_GetNumForName(LargeCursor)+CursorFrame[CursorNum]);
    FlipMenuBuf();
 }
 
@@ -6744,7 +6850,7 @@ void DrawBattleModes
 
    SetAlternateMenuBuf();
    ClearMenuBuf();
-   SetMenuTitle ("Battle Modes");
+   SetMenuTitle ("CO-OP / MULTIPLAYER");
 
 
    MN_GetActive( &ModeItems, &ModeMenu[ 0 ], gamestate.battlemode -
@@ -6837,6 +6943,9 @@ void DrawBattleModeDescription( int w )
    char   *string;
    font_t *temp;
 
+   if (tuinfont)
+      return;
+
    EraseMenuBufRegion (25, 4, 287 - 25, 10 );
 
    temp = CurrentFont;
@@ -6883,6 +6992,307 @@ void DrawBattleModeDescription( int w )
 
 //****************************************************************************
 //
+// Tuin Edition LAN menus
+//
+//****************************************************************************
+
+static void DrawLanMultiplayerMenu(void)
+   {
+   MenuNum = 1;
+   SetAlternateMenuBuf();
+   ClearMenuBuf();
+   SetMenuTitle("MULTIPLAYER / CO-OP");
+   MN_GetCursorLocation(&LanItems,&LanMenu[0]);
+   DrawMenu(&LanItems,&LanMenu[0]);
+   if (tuinfont)
+      DrawMenuBufFontString(30,112,
+         "LAN CO-OP SUPPORTS 2 TO 5 PLAYERS",tuinfont,235);
+   FlipMenuBuf();
+   }
+
+static void DrawLanHostMenu(void)
+   {
+   MenuNum = 1;
+   SetAlternateMenuBuf();
+   ClearMenuBuf();
+   SetMenuTitle("HOST LAN GAME");
+   MN_GetCursorLocation(&LanHostItems,&LanHostMenu[0]);
+   DrawMenu(&LanHostItems,&LanHostMenu[0]);
+   if (tuinfont)
+      DrawMenuBufFontString(30,118,
+         "CHOOSE THE TOTAL NUMBER OF PLAYERS",tuinfont,235);
+   FlipMenuBuf();
+   }
+
+static bool RelaunchLanGame(const char *hostaddress,int players)
+   {
+#if PLATFORM_WIN32
+   char executable[MAX_PATH];
+   char playercount[8];
+   char *program=NULL;
+   const char *arguments[10];
+   int argumentcount=0;
+   intptr_t process;
+   const char *displayarg=sdl_fullscreen ? "-fullscreen" : "-window";
+
+   if (_get_pgmptr(&program) || !program)
+      {
+      CP_DisplayMsg("Unable to find the game executable.",12);
+      return false;
+      }
+   strncpy(executable,program,sizeof(executable)-1);
+   executable[sizeof(executable)-1]='\0';
+
+   /* Restart into the network bootstrap without leaving ROTT.  The new game
+      process creates its window first and presents an in-game waiting panel
+      while the UDP handshake completes. */
+   arguments[argumentcount++]=executable;
+   arguments[argumentcount++]="-net";
+   if (hostaddress)
+      arguments[argumentcount++]=hostaddress;
+   else
+      {
+      snprintf(playercount,sizeof(playercount),"%d",players);
+      arguments[argumentcount++]="-server";
+      arguments[argumentcount++]="-players";
+      arguments[argumentcount++]=playercount;
+      }
+   arguments[argumentcount++]="-nowait";
+   arguments[argumentcount++]=displayarg;
+   arguments[argumentcount]=NULL;
+
+   /* A completed co-op session can return both peers to their menus while
+      the old host still owns UDP 34858.  Release that socket before replacing
+      this process, otherwise a second host immediately fails to bind and its
+      client is left waiting on the abandoned session. */
+   if (modemgame && networkgame)
+      ROTT_ShutdownNetwork();
+
+   process=_spawnv(_P_NOWAIT,executable,arguments);
+   if (process==-1)
+      {
+      CP_DisplayMsg("Unable to start the LAN game.",12);
+      return false;
+      }
+
+   /* Do not throw away the working menu until the replacement process has
+      survived its early startup.  Previously a bad join made both windows
+      disappear and looked exactly like a client crash. */
+   if (WaitForSingleObject((void *)process,2000)==ROTT_WAIT_OBJECT_0)
+      {
+      CloseHandle((void *)process);
+      CP_DisplayMsg(hostaddress ?
+         "LAN client failed.\nRefresh and retry." :
+         "LAN host failed.\nPlease retry.",12);
+      return false;
+      }
+   CloseHandle((void *)process);
+
+   QuitGame();
+   return true;
+#else
+   (void)hostaddress;
+   (void)players;
+   CP_DisplayMsg("LAN quick start is currently available on Windows.",12);
+   return false;
+#endif
+   }
+
+static void CP_StartLanHost(int unused)
+   {
+   int players=handlewhich+2;
+   (void)unused;
+   if (players<2 || players>5)
+      players=2;
+   RelaunchLanGame(NULL,players);
+   DrawLanHostMenu();
+   }
+
+static void CP_LanHostMenu(int unused)
+   {
+   int which;
+   (void)unused;
+   DrawLanHostMenu();
+   do
+      {
+      which=HandleMenu(&LanHostItems,&LanHostMenu[0],NULL);
+      }
+   while (which>=0);
+   DrawLanMultiplayerMenu();
+   }
+
+static bool CP_ManualLanJoin(void)
+   {
+   static char lastaddress[16]="";
+   char input[16];
+   font_t *oldfont=CurrentFont;
+
+   SetAlternateMenuBuf();
+   ClearMenuBuf();
+   SetMenuTitle("JOIN LAN GAME");
+   if (tuinfont)
+      {
+      DrawMenuBufFontString(30,55,"HOST IP ADDRESS",tuinfont,235);
+      FillMenuBufRect(25,72,260,16,254);
+      DrawMenuBufFontString(30,98,
+         "JUST TYPE THE ADDRESS AND PRESS ENTER",tuinfont,235);
+      DrawMenuBufFontString(30,110,
+         "EXAMPLE: 192.168.1.25    ESC: CANCEL",tuinfont,235);
+      }
+   FlipMenuBuf();
+   RefreshMenuBuf(0);
+
+   /* The original line editor is reliable with the game's native font.  It
+      becomes active immediately; no mouse click or focus step is required. */
+   CurrentFont=smallfont;
+   strcpy(input,lastaddress);
+   if (US_LineInput(32,76,input,input,true,15,245,0))
+      {
+      if (input[0])
+         {
+         strcpy(lastaddress,input);
+         CurrentFont=oldfont;
+         return RelaunchLanGame(input,0);
+         }
+      else
+         CP_DisplayMsg("Please enter the host's LAN IP address.",12);
+      }
+   CurrentFont=oldfont;
+   WaitKeyUp();
+   return false;
+   }
+
+static void CP_LanJoin(int unused)
+   {
+   rott_lan_game_t games[ROTT_MAX_LAN_GAMES];
+   CP_MenuNames names[ROTT_MAX_LAN_GAMES+2];
+   CP_itemtype items[ROTT_MAX_LAN_GAMES+2];
+   CP_iteminfo info;
+   int count;
+   int amount;
+   int refreshIndex;
+   int manualIndex;
+   int which;
+   int i;
+   int firstJoinable=-1;
+   (void)unused;
+
+   for (;;)
+      {
+      SetAlternateMenuBuf();
+      ClearMenuBuf();
+      SetMenuTitle("JOIN LAN GAME");
+      if (tuinfont)
+         {
+         DrawMenuBufFontString(30,68,"SEARCHING THE LOCAL NETWORK...",tuinfont,235);
+         DrawMenuBufFontString(30,88,"HOSTS WILL APPEAR HERE AUTOMATICALLY",tuinfont,235);
+         }
+      FlipMenuBuf();
+      RefreshMenuBuf(0);
+
+      memset(games,0,sizeof(games));
+      count=ROTT_DiscoverLanGames(games,ROTT_MAX_LAN_GAMES,700);
+      memset(items,0,sizeof(items));
+      memset(names,0,sizeof(names));
+
+      amount=0;
+      firstJoinable=-1;
+      for (i=0;i<count;i++)
+         {
+         bool joinable=games[i].connected<games[i].players;
+         snprintf(names[amount],sizeof(names[amount]),
+            joinable ? "%s   %d/%d PLAYERS" : "%s   %d/%d FULL",
+            games[i].address,games[i].connected,games[i].players);
+         items[amount].active=joinable ? CP_Active : CP_Inactive;
+         if (joinable && firstJoinable<0)
+            firstJoinable=amount;
+         items[amount].letter='1'+i;
+         amount++;
+         }
+      if (!count)
+         {
+         strcpy(names[amount],"NO LAN GAMES FOUND");
+         items[amount].active=CP_Inactive;
+         amount++;
+         }
+      refreshIndex=amount;
+      strcpy(names[amount],"REFRESH LAN LIST");
+      items[amount].active=CP_Active;
+      items[amount].letter='R';
+      amount++;
+      manualIndex=amount;
+      strcpy(names[amount],"ENTER IP ADDRESS MANUALLY");
+      items[amount].active=CP_Active;
+      items[amount].letter='M';
+      amount++;
+
+      info.x=18;
+      info.y=34;
+      info.amount=amount;
+      info.curpos=(firstJoinable>=0) ? firstJoinable : refreshIndex;
+      info.indent=12;
+      info.names=names;
+      info.fontsize=mn_largefont;
+      items[info.curpos].active=CP_CursorLocation;
+
+      MenuNum=1;
+      SetAlternateMenuBuf();
+      ClearMenuBuf();
+      SetMenuTitle("JOIN LAN GAME");
+      DrawMenu(&info,items);
+      if (tuinfont)
+         DrawMenuBufFontString(30,178,
+            "ENTER: JOIN    R: REFRESH    ESC: BACK",tuinfont,235);
+      FlipMenuBuf();
+      which=HandleMenu(&info,items,NULL);
+      if (which<0)
+         break;
+      if (which<count && games[which].connected<games[which].players)
+         {
+         if (RelaunchLanGame(games[which].address,0))
+            return;
+         }
+      else if (which==manualIndex)
+         {
+         if (CP_ManualLanJoin())
+            return;
+         }
+      /* Refresh is handled by simply scanning and drawing the list again. */
+      }
+   DrawLanMultiplayerMenu();
+   }
+
+static void CP_LanMultiplayer(int unused)
+   {
+   int which;
+   (void)unused;
+
+   /* StartGame is shared with the original new-game/battle menus.  A prior
+      session can leave it set while returning through the title loop, which
+      made a second visit immediately fall out of the LAN menu. */
+   StartGame=false;
+
+   if (ingame)
+      {
+      if (!CP_DisplayMsg(CURGAME,12))
+         return;
+      EndGameStuff();
+      }
+
+   DrawLanMultiplayerMenu();
+   do
+      {
+      which=HandleMenu(&LanItems,&LanMenu[0],NULL);
+      if (which>=0 && !StartGame)
+         DrawLanMultiplayerMenu();
+      }
+   while (which>=0 && !StartGame);
+   if (!StartGame)
+      DrawMainMenu();
+   }
+
+//****************************************************************************
+//
 // CP_BattleModes ()
 //
 //****************************************************************************
@@ -6911,6 +7321,14 @@ void CP_BattleModes ( void )
       {
       Warning = 1;
       CP_OnePlayerWarningMessage();
+      }
+
+   /* Network sessions are primarily co-op in Tuin Edition.  Open the mode
+      list on co-op while still leaving every original battle mode available. */
+   if (networkgame)
+      {
+      gamestate.battlemode=battle_Coop;
+      ModeItems.curpos=battle_Coop-battle_Normal;
       }
 
    DrawBattleModes ();

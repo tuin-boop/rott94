@@ -413,14 +413,20 @@ void DrawTransformedPlanes ( void )
 
 void ClearMenuBuf ( void )
 {
-   byte * shape;
+   byte *shape;
+   byte *darktable;
+   int i;
 
    if (MenuBufStarted==false)
       Error("Called ClearMenuBuf without menubuf started\n");
 
-   shape=W_CacheLumpName(MENUBACKNAME,PU_CACHE, Cvt_patch_t, 1);
+   /* Keep the original artwork, but push it behind the menu like a modern
+      translucent backdrop. */
+   shape=W_CacheLumpName(MENUBACKNAME,PU_CACHE,Cvt_patch_t,1);
    shape+=8;
-   memcpy (menubuf,shape,TEXTUREW*TEXTUREHEIGHT);
+   darktable=colormap+(22<<8);
+   for (i=0;i<TEXTUREW*TEXTUREHEIGHT;i++)
+      menubuf[i]=darktable[shape[i]];
 }
 
 //******************************************************************************
@@ -542,9 +548,10 @@ void PositionMenuBuf( int angle, int distance, bool drawbackground )
    DrawTransformedPlanes();
    DrawPlanePosts();
    oldfont=CurrentFont;
-   CurrentFont = (font_t *)W_CacheLumpName ("newfnt1", PU_CACHE, Cvt_font_t, 1);
+   CurrentFont = tuinfont ? tuinfont :
+      (font_t *)W_CacheLumpName ("newfnt1", PU_CACHE, Cvt_font_t, 1);
    US_MeasureStr (&width, &height, "%s", titlestring);
-   US_ClippedPrint ((320-width)>>1, MENUTITLEY-titleyoffset, titlestring);
+   US_ClippedPrint (24, MENUTITLEY-titleyoffset, titlestring);
    CurrentFont=oldfont;
    FlipPage();
    titleshade+=titleshadedir;
@@ -843,7 +850,8 @@ void EraseMenuBufRegion (int x, int y, int width, int height)
 {
    byte *buffer;
    int xx,yy;
-   byte * shape;
+   byte *shape;
+   byte *darktable;
 
    if (MenuBufStarted==false)
       Error("Called EraseMenuBufRegion without menubuf started\n");
@@ -853,15 +861,15 @@ void EraseMenuBufRegion (int x, int y, int width, int height)
    if ((y<0) || (y+height>=TEXTUREHEIGHT))
       Error ("EraseMenuBufRegion: y is out of range\n");
 
-   shape=W_CacheLumpName(MENUBACKNAME,PU_CACHE, Cvt_patch_t, 1);
-   shape+=8;
-   shape+=(x*TEXTUREHEIGHT)+y;
    buffer = (byte*)menubuf+(x*TEXTUREHEIGHT)+y;
+   shape=W_CacheLumpName(MENUBACKNAME,PU_CACHE,Cvt_patch_t,1);
+   shape+=8+(x*TEXTUREHEIGHT)+y;
+   darktable=colormap+(22<<8);
 
    for (xx = 0; xx < width; xx++)
       {
       for (yy = 0; yy < height; yy++)
-         *(buffer+yy)=*(shape+yy);
+         *(buffer+yy)=darktable[*(shape+yy)];
       buffer+=TEXTUREHEIGHT;
       shape+=TEXTUREHEIGHT;
       }
@@ -1176,6 +1184,52 @@ void DrawTMenuBufVLine (int x, int y, int height, bool up)
 // DrawMenuBufPropString ()
 //
 //******************************************************************************
+
+void FillMenuBufRect (int x,int y,int width,int height,byte color)
+{
+   int xx;
+   byte *column;
+
+   if (x<0) x=0;
+   if (y<0) y=0;
+   if (x+width>TEXTUREW) width=TEXTUREW-x;
+   if (y+height>TEXTUREHEIGHT) height=TEXTUREHEIGHT-y;
+   for (xx=0;xx<width;xx++)
+      {
+      column=menubuf+((x+xx)*TEXTUREHEIGHT)+y;
+      memset(column,color,height);
+      }
+}
+
+void DrawMenuBufFontString(int x,int y,const char *string,font_t *font,
+   byte color)
+{
+   int ch,width,height;
+   byte *source;
+   byte *dest;
+   byte *column;
+
+   while ((ch=(unsigned char)*string++)!=0)
+      {
+      ch-=31;
+      width=font->width[ch];
+      source=((byte*)font)+font->charofs[ch];
+      column=menubuf+(x*TEXTUREHEIGHT)+y;
+      while (width-- && x<TEXTUREW)
+         {
+         dest=column;
+         height=font->height;
+         while (height-- && y+(font->height-height-1)<TEXTUREHEIGHT)
+            {
+            if (*source) *dest=color;
+            source++;
+            dest++;
+            }
+         x++;
+         column+=TEXTUREHEIGHT;
+         }
+      }
+}
 
 void DrawMenuBufPropString (int px, int py, const char *string)
 {
@@ -1504,7 +1558,10 @@ void FlipMenuBuf ( void )
    if (!readytoflip)
       Error("FlipMenuBuf called without SetAlternateMenuBuf beforehand");
    readytoflip=0;
-   if (Menuflipspeed<=5)
+   /* RottEnhanced uses immediate, readable menu changes.  The original
+      rotating-card transition made nested settings feel slow and visually
+      noisy, especially at modern fullscreen resolutions. */
+   if (true)
       {
       menubuf=menubuffers[alternatemenubuf];
       strcpy(titlestring,menutitles[alternatemenubuf]);

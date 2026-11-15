@@ -138,6 +138,9 @@ bool    advancedlighting = false;
 bool    advancedcoloredlights = true;
 bool    advancedlightflicker = true;
 bool    advanceddarkambient = true;
+/* Kept as an internal compatibility flag for older configs/builds. The
+   replacement-art feature and its user-facing option have been retired. */
+bool    enhancedweapons = false;
 int     blanktime        = (2*60*VBLCOUNTER);
 bool ConfigLoaded     = false;
 bool stereoreversed   = false;

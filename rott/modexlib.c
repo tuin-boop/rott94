@@ -50,7 +50,9 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 //MED
 #include "memcheck.h"
 #include "rt_util.h"
+#include "rt_cfg.h"
 #include "rt_net.h" // for GamePaused
+#include "w_wad.h"
 #include "myprint.h"
 
 static void StretchMemPicture ();
@@ -478,6 +480,35 @@ typedef struct
 	int origsize,leftoffset,topoffset;
 } advanced_patch_texture_t;
 static advanced_patch_texture_t advancedPatchTextures[512];
+static bool advancedPatchUpscale = false;
+typedef struct
+{
+	int lump;
+	GLuint texture;
+} enhanced_weapon_texture_t;
+static enhanced_weapon_texture_t enhancedWeaponTextures[64];
+typedef struct
+{
+	int lump;
+	SDL_Texture *texture;
+	int sourceWidth,sourceHeight;
+	int logicalWidth,logicalHeight;
+} enhanced_weapon_sdl_texture_t;
+static enhanced_weapon_sdl_texture_t enhancedWeaponSdlTextures[64];
+typedef struct
+{
+	char name[9];
+	SDL_Texture *texture;
+	int sourceWidth,sourceHeight;
+} enhanced_weapon_animation_texture_t;
+static enhanced_weapon_animation_texture_t enhancedWeaponAnimationTextures[160];
+static int enhancedWeaponMain=-1,enhancedWeaponAlt=-1;
+static int enhancedWeaponMainX,enhancedWeaponMainY;
+static int enhancedWeaponAltX,enhancedWeaponAltY;
+static char enhancedWeaponAnimation[9];
+static int enhancedWeaponAnimationFrame;
+static int enhancedWeaponAnimationLump=-1;
+static int enhancedWeaponAnimationX,enhancedWeaponAnimationY;
 extern unsigned int lastInteraction;
 extern byte *AdvancedRendererGetWallPixels(int lump);
 extern byte *AdvancedRendererGetPatchPixels(int lump);
@@ -684,16 +715,52 @@ static void AdvancedWallTop(int lump,float x0,float z0,float x1,float z1,
 	glEnd();
 }
 
+/* Scale2x preserves hard pixel-art detail while smoothing stair-stepped
+   silhouettes.  Applying it twice gives the HUD weapon a real 4x source
+   texture instead of merely blurring the original low-resolution patch. */
+static uint32_t *AdvancedScale2x(const uint32_t *source,int width,int height)
+{
+	uint32_t *output;
+	int x,y;
+	if (!source || width<=0 || height<=0) return NULL;
+	output=(uint32_t *)malloc((size_t)width*2*(size_t)height*2*
+		sizeof(uint32_t));
+	if (!output) return NULL;
+	for (y=0;y<height;y++)
+		for (x=0;x<width;x++)
+		{
+			uint32_t e=source[y*width+x];
+			uint32_t b=source[(y>0 ? y-1 : y)*width+x];
+			uint32_t d=source[y*width+(x>0 ? x-1 : x)];
+			uint32_t f=source[y*width+(x+1<width ? x+1 : x)];
+			uint32_t h=source[(y+1<height ? y+1 : y)*width+x];
+			uint32_t *row0=output+(y*2)*(width*2)+x*2;
+			uint32_t *row1=row0+width*2;
+			if (b!=h && d!=f)
+			{
+				row0[0]=(d==b) ? d : e;
+				row0[1]=(b==f) ? f : e;
+				row1[0]=(d==h) ? d : e;
+				row1[1]=(h==f) ? f : e;
+			}
+			else
+				row0[0]=row0[1]=row1[0]=row1[1]=e;
+		}
+	return output;
+}
+
 static GLuint AdvancedPatchTexture(int lump,bool transparentPatch,
 	int *outWidth,int *outHeight,int *outOrigSize,
 	int *outLeftOffset,int *outTopOffset)
 {
 	byte *shape,*column;
 	patch_t *patch;
-	uint32_t *rgba,*tintRgba=NULL;
+	uint32_t *rgba,*tintRgba=NULL,*scaledOnce=NULL,*scaledTwice=NULL;
 	SDL_Palette *palette;
-	int slot,tintSlot=-1,x,y,width,height;
-	int cacheKey=transparentPatch ? (lump|0x40000000) : lump;
+	int slot,tintSlot=-1,x,y,width,height,uploadWidth,uploadHeight;
+	bool upscaleWeapon=advancedPatchUpscale && !transparentPatch;
+	int cacheKey=(transparentPatch ? (lump|0x40000000) : lump) |
+		(upscaleWeapon ? 0x10000000 : 0);
 
 	if (lump<0) return 0;
 	for (slot=0;slot<512;slot++)
@@ -799,12 +866,29 @@ static GLuint AdvancedPatchTexture(int lump,bool transparentPatch,
 	}
 	glGenTextures(1,&advancedPatchTextures[slot].texture);
 	glBindTexture(GL_TEXTURE_2D,advancedPatchTextures[slot].texture);
-	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_NEAREST);
-	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_NEAREST);
+	uploadWidth=width;
+	uploadHeight=height;
+	if (upscaleWeapon)
+	{
+		scaledOnce=AdvancedScale2x(rgba,width,height);
+		if (scaledOnce)
+			scaledTwice=AdvancedScale2x(scaledOnce,width*2,height*2);
+		if (scaledTwice)
+		{
+			uploadWidth=width*4;
+			uploadHeight=height*4;
+		}
+	}
+	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,
+		upscaleWeapon ? GL_LINEAR : GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,
+		upscaleWeapon ? GL_LINEAR : GL_NEAREST);
 	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP);
 	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_CLAMP);
-	glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA,width,height,0,
-		GL_BGRA,GL_UNSIGNED_BYTE,rgba);
+	glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA,uploadWidth,uploadHeight,0,
+		GL_BGRA,GL_UNSIGNED_BYTE,scaledTwice ? scaledTwice : rgba);
+	free(scaledTwice);
+	free(scaledOnce);
 	free(rgba);
 	if (tintRgba)
 	{
@@ -832,6 +916,345 @@ static GLuint AdvancedPatchTexture(int lump,bool transparentPatch,
 	if (outLeftOffset) *outLeftOffset=advancedPatchTextures[slot].leftoffset;
 	if (outTopOffset) *outTopOffset=advancedPatchTextures[slot].topoffset;
 	return advancedPatchTextures[slot].texture;
+}
+
+static GLuint AdvancedWeaponPatchTexture(int lump,int *outWidth,int *outHeight)
+{
+	GLuint texture;
+	advancedPatchUpscale=true;
+	texture=AdvancedPatchTexture(lump,false,outWidth,outHeight,NULL,NULL,NULL);
+	advancedPatchUpscale=false;
+	return texture;
+}
+
+static GLuint AdvancedExternalWeaponTexture(int lump)
+{
+	char filename[128];
+	char magic[4];
+	const char *name;
+	FILE *file;
+	uint32_t *pixels;
+	GLuint texture;
+	int slot,width,height;
+	size_t count;
+
+	for (slot=0;slot<64;slot++)
+		if (enhancedWeaponTextures[slot].texture &&
+			enhancedWeaponTextures[slot].lump==lump)
+			return enhancedWeaponTextures[slot].texture;
+	for (slot=0;slot<64;slot++)
+		if (!enhancedWeaponTextures[slot].texture) break;
+	if (slot==64) return 0;
+
+	name=W_GetNameForNum(lump);
+	if (!name || !name[0]) return 0;
+	snprintf(filename,sizeof(filename),"enhanced-weapons\\%.8s.rwh",name);
+	file=fopen(filename,"rb");
+	if (!file)
+	{
+		snprintf(filename,sizeof(filename),
+			"assets\\enhanced-weapons\\runtime\\%.8s.rwh",name);
+		file=fopen(filename,"rb");
+	}
+	if (!file) return 0;
+	if (fread(magic,1,4,file)!=4 || memcmp(magic,"RWH1",4) ||
+		fread(&width,sizeof(width),1,file)!=1 ||
+		fread(&height,sizeof(height),1,file)!=1 ||
+		width<=0 || height<=0 || width>4096 || height>4096)
+	{
+		fclose(file);
+		return 0;
+	}
+	count=(size_t)width*(size_t)height;
+	pixels=(uint32_t *)malloc(count*sizeof(uint32_t));
+	if (!pixels)
+	{
+		fclose(file);
+		return 0;
+	}
+	if (fread(pixels,sizeof(uint32_t),count,file)!=count)
+	{
+		free(pixels);
+		fclose(file);
+		return 0;
+	}
+	fclose(file);
+
+	glGenTextures(1,&texture);
+	glBindTexture(GL_TEXTURE_2D,texture);
+	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP);
+	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_CLAMP);
+	glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA,width,height,0,GL_BGRA,
+		GL_UNSIGNED_BYTE,pixels);
+	free(pixels);
+	enhancedWeaponTextures[slot].lump=lump;
+	enhancedWeaponTextures[slot].texture=texture;
+	return texture;
+}
+
+static FILE *EnhancedWeaponOpen(int lump,char *filename,size_t filenameSize)
+{
+	const char *name=W_GetNameForNum(lump);
+	FILE *file;
+	if (!name || !name[0]) return NULL;
+	snprintf(filename,filenameSize,"enhanced-weapons\\%.8s.rwh",name);
+	file=fopen(filename,"rb");
+	if (!file)
+	{
+		snprintf(filename,filenameSize,
+			"assets\\enhanced-weapons\\runtime\\%.8s.rwh",name);
+		file=fopen(filename,"rb");
+	}
+	return file;
+}
+
+static FILE *EnhancedWeaponOpenAnimation(const char *family,int frame,
+	char *filename,size_t filenameSize,char *name,size_t nameSize)
+{
+	FILE *file;
+	if (!family || !family[0] || frame<0 || frame>7) return NULL;
+	snprintf(name,nameSize,"%.7s%d",family,frame);
+	snprintf(filename,filenameSize,"enhanced-weapons\\%s.rwh",name);
+	file=fopen(filename,"rb");
+	if (!file)
+	{
+		snprintf(filename,filenameSize,
+			"assets\\enhanced-weapons\\runtime\\%s.rwh",name);
+		file=fopen(filename,"rb");
+	}
+	return file;
+}
+
+bool EnhancedWeaponReplacementAvailable(int lump)
+{
+	char filename[128];
+	FILE *file;
+	if (!enhancedweapons || lump<0) return false;
+	file=EnhancedWeaponOpen(lump,filename,sizeof(filename));
+	if (!file) return false;
+	fclose(file);
+	return true;
+}
+
+void EnhancedWeaponSetFrame(int mainLump,int altLump,
+	int mainX,int mainY,int altX,int altY)
+{
+	enhancedWeaponAnimation[0]=0;
+	enhancedWeaponMain=mainLump;
+	enhancedWeaponAlt=altLump;
+	enhancedWeaponMainX=mainX;
+	enhancedWeaponMainY=mainY;
+	enhancedWeaponAltX=altX;
+	enhancedWeaponAltY=altY;
+}
+
+bool EnhancedWeaponAnimationAvailable(const char *family,int frame)
+{
+	char filename[160],name[9];
+	FILE *file;
+	if (!enhancedweapons) return false;
+	file=EnhancedWeaponOpenAnimation(family,frame,filename,sizeof(filename),
+		name,sizeof(name));
+	if (!file) return false;
+	fclose(file);
+	return true;
+}
+
+void EnhancedWeaponSetAnimation(const char *family,int frame,int logicalLump,
+	int xOffset,int yOffset)
+{
+	enhancedWeaponMain=enhancedWeaponAlt=-1;
+	enhancedWeaponAnimation[0]=0;
+	if (!family || !family[0] || frame<0 || frame>7 || logicalLump<0)
+		return;
+	strncpy(enhancedWeaponAnimation,family,sizeof(enhancedWeaponAnimation)-1);
+	enhancedWeaponAnimation[sizeof(enhancedWeaponAnimation)-1]=0;
+	enhancedWeaponAnimationFrame=frame;
+	enhancedWeaponAnimationLump=logicalLump;
+	enhancedWeaponAnimationX=xOffset;
+	enhancedWeaponAnimationY=yOffset;
+}
+
+static enhanced_weapon_sdl_texture_t *EnhancedWeaponSdlTexture(int lump)
+{
+	char filename[128],magic[4];
+	FILE *file;
+	uint32_t *pixels;
+	patch_t *patch;
+	int slot,width,height;
+	size_t count;
+	for (slot=0;slot<64;slot++)
+		if (enhancedWeaponSdlTextures[slot].texture &&
+			enhancedWeaponSdlTextures[slot].lump==lump)
+			return &enhancedWeaponSdlTextures[slot];
+	for (slot=0;slot<64;slot++)
+		if (!enhancedWeaponSdlTextures[slot].texture) break;
+	if (slot==64 || !sdl_renderer) return NULL;
+	file=EnhancedWeaponOpen(lump,filename,sizeof(filename));
+	if (!file) return NULL;
+	if (fread(magic,1,4,file)!=4 || memcmp(magic,"RWH1",4) ||
+		fread(&width,sizeof(width),1,file)!=1 ||
+		fread(&height,sizeof(height),1,file)!=1 ||
+		width<=0 || height<=0 || width>4096 || height>4096)
+	{
+		fclose(file);
+		return NULL;
+	}
+	count=(size_t)width*(size_t)height;
+	pixels=(uint32_t *)malloc(count*sizeof(uint32_t));
+	if (!pixels || fread(pixels,sizeof(uint32_t),count,file)!=count)
+	{
+		free(pixels);
+		fclose(file);
+		return NULL;
+	}
+	fclose(file);
+	enhancedWeaponSdlTextures[slot].texture=SDL_CreateTexture(sdl_renderer,
+		SDL_PIXELFORMAT_BGRA32,SDL_TEXTUREACCESS_STATIC,width,height);
+	if (!enhancedWeaponSdlTextures[slot].texture)
+	{
+		free(pixels);
+		return NULL;
+	}
+	SDL_UpdateTexture(enhancedWeaponSdlTextures[slot].texture,NULL,pixels,
+		width*(int)sizeof(uint32_t));
+	SDL_SetTextureBlendMode(enhancedWeaponSdlTextures[slot].texture,
+		SDL_BLENDMODE_BLEND);
+	free(pixels);
+	patch=(patch_t *)AdvancedRendererGetPatchPixels(lump);
+	enhancedWeaponSdlTextures[slot].lump=lump;
+	enhancedWeaponSdlTextures[slot].sourceWidth=width;
+	enhancedWeaponSdlTextures[slot].sourceHeight=height;
+	enhancedWeaponSdlTextures[slot].logicalWidth=patch ? patch->width : width;
+	enhancedWeaponSdlTextures[slot].logicalHeight=patch ? patch->height : height;
+	return &enhancedWeaponSdlTextures[slot];
+}
+
+static void EnhancedWeaponDrawOne(int lump,int xOffset,int yOffset)
+{
+	enhanced_weapon_sdl_texture_t *entry;
+	SDL_Rect destination;
+	int outputWidth,outputHeight;
+	float scale;
+	if (!enhancedweapons || advancedGpuRenderer || lump<0) return;
+	entry=EnhancedWeaponSdlTexture(lump);
+	if (!entry) return;
+	SDL_GetRendererOutputSize(sdl_renderer,&outputWidth,&outputHeight);
+	scale=(float)outputHeight/200.0f;
+	destination.w=(int)((float)entry->logicalWidth*scale+0.5f);
+	destination.h=(int)((float)entry->logicalHeight*scale+0.5f);
+	destination.x=(outputWidth-destination.w)/2+(int)((float)xOffset*scale);
+	destination.y=outputHeight-destination.h+(int)((float)yOffset*scale);
+	SDL_RenderCopy(sdl_renderer,entry->texture,NULL,&destination);
+}
+
+static enhanced_weapon_animation_texture_t *EnhancedWeaponAnimationTexture(
+	const char *family,int frame)
+{
+	char filename[160],name[9],magic[4];
+	FILE *file;
+	uint32_t *pixels;
+	int slot,width,height;
+	size_t count;
+	file=EnhancedWeaponOpenAnimation(family,frame,filename,sizeof(filename),
+		name,sizeof(name));
+	if (!file) return NULL;
+	for (slot=0;slot<160;slot++)
+		if (enhancedWeaponAnimationTextures[slot].texture &&
+			!strcmp(enhancedWeaponAnimationTextures[slot].name,name))
+		{
+			fclose(file);
+			return &enhancedWeaponAnimationTextures[slot];
+		}
+	for (slot=0;slot<160;slot++)
+		if (!enhancedWeaponAnimationTextures[slot].texture) break;
+	if (slot==160 || !sdl_renderer)
+	{
+		fclose(file);
+		return NULL;
+	}
+	if (fread(magic,1,4,file)!=4 || memcmp(magic,"RWH1",4) ||
+		fread(&width,sizeof(width),1,file)!=1 ||
+		fread(&height,sizeof(height),1,file)!=1 ||
+		width<=0 || height<=0 || width>4096 || height>4096)
+	{
+		fclose(file);
+		return NULL;
+	}
+	count=(size_t)width*(size_t)height;
+	pixels=(uint32_t *)malloc(count*sizeof(uint32_t));
+	if (!pixels || fread(pixels,sizeof(uint32_t),count,file)!=count)
+	{
+		free(pixels);
+		fclose(file);
+		return NULL;
+	}
+	fclose(file);
+	enhancedWeaponAnimationTextures[slot].texture=SDL_CreateTexture(sdl_renderer,
+		SDL_PIXELFORMAT_BGRA32,SDL_TEXTUREACCESS_STATIC,width,height);
+	if (!enhancedWeaponAnimationTextures[slot].texture)
+	{
+		free(pixels);
+		return NULL;
+	}
+	SDL_UpdateTexture(enhancedWeaponAnimationTextures[slot].texture,NULL,pixels,
+		width*(int)sizeof(uint32_t));
+	SDL_SetTextureBlendMode(enhancedWeaponAnimationTextures[slot].texture,
+		SDL_BLENDMODE_BLEND);
+	free(pixels);
+	strncpy(enhancedWeaponAnimationTextures[slot].name,name,
+		sizeof(enhancedWeaponAnimationTextures[slot].name)-1);
+	enhancedWeaponAnimationTextures[slot].name[
+		sizeof(enhancedWeaponAnimationTextures[slot].name)-1]=0;
+	enhancedWeaponAnimationTextures[slot].sourceWidth=width;
+	enhancedWeaponAnimationTextures[slot].sourceHeight=height;
+	return &enhancedWeaponAnimationTextures[slot];
+}
+
+static void EnhancedWeaponDrawAnimation(void)
+{
+	enhanced_weapon_animation_texture_t *entry;
+	patch_t *patch;
+	SDL_Rect destination;
+	int outputWidth,outputHeight,logicalWidth,logicalHeight;
+	float scale;
+	if (!enhancedweapons || advancedGpuRenderer ||
+		!enhancedWeaponAnimation[0] || enhancedWeaponAnimationLump<0)
+		return;
+	entry=EnhancedWeaponAnimationTexture(enhancedWeaponAnimation,
+		enhancedWeaponAnimationFrame);
+	if (!entry) return;
+	patch=(patch_t *)AdvancedRendererGetPatchPixels(enhancedWeaponAnimationLump);
+	logicalWidth=patch ? patch->width : entry->sourceWidth;
+	logicalHeight=patch ? patch->height : entry->sourceHeight;
+	SDL_GetRendererOutputSize(sdl_renderer,&outputWidth,&outputHeight);
+	scale=(float)outputHeight/200.0f;
+	destination.w=(int)((float)logicalWidth*scale+0.5f);
+	destination.h=(int)((float)logicalHeight*scale+0.5f);
+	destination.x=(outputWidth-destination.w)/2+
+		(int)((float)enhancedWeaponAnimationX*scale);
+	destination.y=outputHeight-destination.h+
+		(int)((float)enhancedWeaponAnimationY*scale);
+	SDL_RenderCopy(sdl_renderer,entry->texture,NULL,&destination);
+}
+
+static void EnhancedWeaponDrawFrame(void)
+{
+	if (enhancedWeaponAnimation[0])
+		EnhancedWeaponDrawAnimation();
+	else
+	{
+		EnhancedWeaponDrawOne(enhancedWeaponAlt,enhancedWeaponAltX,
+			enhancedWeaponAltY);
+		EnhancedWeaponDrawOne(enhancedWeaponMain,enhancedWeaponMainX,
+			enhancedWeaponMainY);
+	}
+	/* Frame state is supplied by the play renderer.  Consume it so menus and
+	   loading screens never inherit the last weapon image. */
+	enhancedWeaponMain=enhancedWeaponAlt=-1;
+	enhancedWeaponAnimation[0]=0;
 }
 
 static GLuint AdvancedTransPatchTintTexture(int lump)
@@ -1103,8 +1526,11 @@ static void AdvancedScreenPatch(int lump,float centerX,int yOffset,
 	int drawableWidth,int drawableHeight)
 {
 	int width,height;
-	GLuint texture=AdvancedPatchTexture(lump,false,&width,&height,
-		NULL,NULL,NULL);
+	/* Keep the authentic WAD artwork, but prepare it at 4x resolution with
+	   two edge-aware Scale2x passes. This is deterministic pixel-art scaling,
+	   needs no replacement assets, and applies automatically in the advanced
+	   renderer instead of exposing another graphics option. */
+	GLuint texture=AdvancedWeaponPatchTexture(lump,&width,&height);
 	float aspect=(float)drawableWidth/(float)drawableHeight;
 	float h=(float)height/200.0f;
 	float w=((float)width/200.0f)/aspect;
@@ -2380,6 +2806,7 @@ void VH_UpdateScreen (void)
 		UpdateScreenTexture();
 		SDL_RenderClear(sdl_renderer);
 		SDL_RenderCopy(sdl_renderer, sdl_texture, NULL, NULL);
+		EnhancedWeaponDrawFrame();
 		RenderCopyHintTexture();
 		SDL_RenderPresent(sdl_renderer);
 	}
@@ -2424,6 +2851,7 @@ void XFlipPage ( void )
 		UpdateScreenTexture();
 		SDL_RenderClear(sdl_renderer);
 		SDL_RenderCopy(sdl_renderer, sdl_texture, NULL, NULL);
+		EnhancedWeaponDrawFrame();
 		RenderCopyHintTexture();
 		SDL_RenderPresent(sdl_renderer);
 	}

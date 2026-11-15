@@ -304,6 +304,12 @@ void InterpolateDoor (visobj_t * plane);
 void InterpolateWall (visobj_t * plane);
 extern bool AdvancedRendererActive(void);
 extern void AdvancedRendererPrepareHud(void);
+extern bool EnhancedWeaponReplacementAvailable(int lump);
+extern void EnhancedWeaponSetFrame(int mainLump,int altLump,
+   int mainX,int mainY,int altX,int altY);
+extern bool EnhancedWeaponAnimationAvailable(const char *family,int frame);
+extern void EnhancedWeaponSetAnimation(const char *family,int frame,
+   int logicalLump,int xOffset,int yOffset);
 byte *AdvancedRendererGetPatchPixels(int lump)
 {
    return W_CacheLumpNum(lump,PU_CACHE,Cvt_patch_t,1);
@@ -392,6 +398,131 @@ static void AdvancedRendererWeapon(int *mainLump,int *altLump,
          *yOffset=20;
       }
    *yOffset+=locplayerstate->weaponheight;
+}
+
+static const char *EnhancedWeaponAnimationFamily(int *logicalLump,
+   int *xOffset,int *yOffset)
+{
+   int female,black,index;
+   *logicalLump=-1;
+   *xOffset=0;
+   *yOffset=locplayerstate->weaponheight;
+   female=(locplayerstate->player==1 || locplayerstate->player==3);
+   black=(locplayerstate->player==2);
+
+   if (((locplayerstate->NETCAPTURED>=1) ||
+        (locplayerstate->NETCAPTURED==-2)) && locplayerstate->HASKNIFE)
+      {
+      *logicalLump=gunsstart+weaponshape[0];
+      *xOffset=60;
+      return "KNIFE";
+      }
+   if (locplayerstate->weapon<0 ||
+       (locplayerstate->NETCAPTURED==1 && !locplayerstate->HASKNIFE))
+      return NULL;
+
+   if (locplayerstate->weapon==wp_twopistol)
+      {
+#if (SHAREWARE == 0)
+      if (female)
+         {
+         *logicalLump=gunsstart+W_FRIGHTPISTOL1;
+         return "DUALF";
+         }
+      if (black)
+         {
+         *logicalLump=gunsstart+W_BMRIGHTPISTOL1;
+         return "DUALB";
+         }
+#endif
+      *logicalLump=gunsstart+W_MRIGHTPISTOL1;
+      return "DUALM";
+      }
+
+   if (locplayerstate->weapon==wp_pistol)
+      {
+#if (SHAREWARE == 0)
+      if (female)
+         {
+         index=NUMWEAPGRAPHICS-2;
+         *logicalLump=gunsstart+weaponshape[index];
+         return "FPIST";
+         }
+      if (black)
+         {
+         index=NUMWEAPGRAPHICS-1;
+         *logicalLump=gunsstart+weaponshape[index];
+         return "BPIST";
+         }
+      index=1;
+#else
+      index=0;
+#endif
+      *logicalLump=gunsstart+weaponshape[index];
+      return "MPIST";
+      }
+
+#if (SHAREWARE == 0)
+   index=locplayerstate->weapon+1;
+#else
+   index=locplayerstate->weapon;
+#endif
+   if (index>=0 && index<NUMWEAPGRAPHICS)
+      *logicalLump=gunsstart+weaponshape[index];
+   switch (locplayerstate->weapon)
+      {
+      case wp_mp40: return "MP40";
+      case wp_bazooka: return "BAZOOKA";
+      case wp_heatseeker: *yOffset+=20; return "HSEEK";
+      case wp_drunk: *yOffset+=10; return "DRUNK";
+      case wp_firebomb: return "FBOMB";
+      case wp_firewall: *yOffset+=10; return "FIREW";
+      case wp_godhand: return "GODHAND";
+#if (SHAREWARE == 0)
+      case wp_split: *yOffset+=20; return "SPLIT";
+      case wp_kes: return "KES";
+      case wp_bat: *xOffset=20; return "EXBAT";
+      case wp_dog: return "DOG";
+#endif
+      default: return NULL;
+      }
+}
+
+static int EnhancedWeaponAnimationFrame(void)
+{
+   int attacks,frame,total,elapsed,index,remaining;
+   if (((locplayerstate->NETCAPTURED>=1) ||
+        (locplayerstate->NETCAPTURED==-2)) && locplayerstate->HASKNIFE)
+      {
+      frame=locplayerstate->weaponframe;
+      if (frame<0) frame=0;
+      if (frame>7) frame=7;
+      return frame;
+      }
+   if (locplayerstate->weapon<0 ||
+       (locplayerstate->attackframe<=0 && locplayerstate->attackcount<=0))
+      return 0;
+   attacks=WEAPONS[locplayerstate->weapon].numattacks;
+   if (attacks<1) return 0;
+   total=0;
+   for (index=0;index<attacks;index++)
+      total+=WEAPONS[locplayerstate->weapon].attackinfo[index].mtics;
+   if (total<2) return 7;
+   elapsed=0;
+   for (index=0;index<locplayerstate->attackframe && index<attacks;index++)
+      elapsed+=WEAPONS[locplayerstate->weapon].attackinfo[index].mtics;
+   index=locplayerstate->attackframe;
+   if (index<0) index=0;
+   if (index>=attacks) index=attacks-1;
+   remaining=locplayerstate->attackcount;
+   if (remaining<0) remaining=0;
+   if (remaining>WEAPONS[locplayerstate->weapon].attackinfo[index].mtics)
+      remaining=WEAPONS[locplayerstate->weapon].attackinfo[index].mtics;
+   elapsed+=WEAPONS[locplayerstate->weapon].attackinfo[index].mtics-remaining;
+   frame=1+(elapsed*6)/(total-1);
+   if (frame<1) frame=1;
+   if (frame>7) frame=7;
+   return frame;
 }
 
 static bool DynamicLightReaches (int fromx,int fromy,int tox,int toy)
@@ -3732,7 +3863,33 @@ void      ThreeDRefresh (void)
 			  value = locplayerstate->NETCAPTURED;
 			DrawScreenSizedSprite(netlump+value-1);
 			}
-		DrawPlayerWeapon ();    // draw player's hand'
+		{
+		int enhancedMain,enhancedAlt,enhancedX,enhancedY;
+		int animationLump,animationX,animationY,animationFrame;
+		const char *animationFamily;
+		AdvancedRendererWeapon(&enhancedMain,&enhancedAlt,&enhancedX,&enhancedY);
+		animationFamily=EnhancedWeaponAnimationFamily(&animationLump,
+		   &animationX,&animationY);
+		animationFrame=EnhancedWeaponAnimationFrame();
+		if (!AdvancedRendererActive() && animationFamily &&
+		    EnhancedWeaponAnimationAvailable(animationFamily,animationFrame))
+		   {
+		   EnhancedWeaponSetAnimation(animationFamily,animationFrame,
+		      animationLump,animationX+weaponbobx,animationY+weaponboby);
+		   }
+		else
+		   {
+		   EnhancedWeaponSetFrame(enhancedMain,enhancedAlt,
+		      enhancedX+weaponbobx,enhancedY+weaponboby,
+		      weaponbobx-80,enhancedY+weaponboby);
+		   /* A generated replacement is composited after the stable classic
+		      world. Suppress the software sprite only when every visible hand
+		      has a matching native-resolution frame. */
+		   if (!EnhancedWeaponReplacementAvailable(enhancedMain) ||
+		       (enhancedAlt>=0 && !EnhancedWeaponReplacementAvailable(enhancedAlt)))
+		      DrawPlayerWeapon ();    // draw player's hand'
+		   }
+		}
 
 		if (SCREENEYE)
 		  DrawScreenSprite(SCREENEYE->targettilex,SCREENEYE->targettiley,SCREENEYE->state->condition + GIBEYE1 + shapestart);

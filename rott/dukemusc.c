@@ -12,6 +12,14 @@
 #include <string.h>
 #include <assert.h>
 
+#if PLATFORM_WIN32
+#include <process.h>
+#define ROTT_PROCESS_ID() _getpid()
+#else
+#include <unistd.h>
+#define ROTT_PROCESS_ID() getpid()
+#endif
+
 #define ROTT
 
 #ifdef DUKE3D
@@ -190,6 +198,7 @@ static int music_context = 0;
 static int music_loopflag = MUSIC_PlayOnce;
 static char *music_songdata = NULL;
 static Mix_Music *music_musicchunk = NULL;
+static char music_tempfile[MAX_PATH] = "";
 
 int MUSIC_Init(int SoundCard, int Address)
 {
@@ -226,6 +235,11 @@ int MUSIC_Shutdown(void)
     } // if
 
     MUSIC_StopSong();
+    if (music_tempfile[0])
+    {
+        remove(music_tempfile);
+        music_tempfile[0] = '\0';
+    }
     music_context = 0;
     music_initialized = 0;
     music_loopflag = MUSIC_PlayOnce;
@@ -425,8 +439,18 @@ int MUSIC_PlaySongROTT(unsigned char *song, int size, int loopflag)
 
 #ifndef __ANDROID__
     MUSIC_StopSong();
-    // save the file somewhere, so SDL_mixer can load it
-    GetPathFromEnvironment(filename, ApogeePath, "tmpsong.mid");
+    /* Every local co-op process needs its own MIDI file.  Sharing the old
+       tmpsong.mid name made one instance truncate or lock the other one's
+       music and terminate during localhost joins. */
+    if (!music_tempfile[0])
+    {
+        char tempname[40];
+        snprintf(tempname,sizeof(tempname),"tmpsong-%lu.mid",
+            (unsigned long)ROTT_PROCESS_ID());
+        GetPathFromEnvironment(music_tempfile,ApogeePath,tempname);
+    }
+    strncpy(filename,music_tempfile,sizeof(filename)-1);
+    filename[sizeof(filename)-1]='\0';
 #else
     strcpy(filename, ApogeePath);
     strcat(filename, "/tmpsong.mid");

@@ -62,8 +62,8 @@ typedef struct
 	short	datalength;		// bytes in rottdata to be sent / bytes read
 
 // info specific to this node
-	short	consoleplayer;	// 0-3 = player number
-	short	numplayers;		// 1-4
+	short	consoleplayer;	// raw network player number (server is 1)
+	short	numplayers;		// 1-MAXPLAYERS
    short   client;         // 0 = server 1 = client
    short   gametype;       // 0 = modem  1 = network
    short   ticstep;        // 1 for every tic 2 for every other tic ...

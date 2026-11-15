@@ -97,6 +97,8 @@ static void WriteUDPPacket()
 #define ROTT_NET_MAGIC    0x504f4352UL /* "RCOP" */
 #define ROTT_HELLO        1
 #define ROTT_WELCOME      2
+#define ROTT_DISCOVER     3
+#define ROTT_OFFER        4
 
 typedef struct
    {
@@ -109,10 +111,197 @@ typedef struct
 
 static SOCKET udp_socket = INVALID_SOCKET;
 static struct sockaddr_in udp_peer;
+#define ROTT_COOP_MAX_PLAYERS 5
+static struct sockaddr_in udp_peers[MAXPLAYERS + 1];
+static bool udp_peer_active[MAXPLAYERS + 1];
 static bool udp_is_server = false;
 static bool udp_loopback_ready = false;
 static short udp_loopback_length = 0;
 static byte udp_loopback_data[MAXCOMBUFFERSIZE];
+
+const char *ROTT_GetLanAddress(void)
+   {
+   static char address[64]="127.0.0.1";
+   WSADATA winsock;
+   char hostname[256];
+   struct addrinfo hints;
+   struct addrinfo *result=NULL;
+   struct addrinfo *entry;
+
+   if (WSAStartup(MAKEWORD(2,2),&winsock) != 0)
+      return address;
+   if (gethostname(hostname,sizeof(hostname)) == 0)
+      {
+      memset(&hints,0,sizeof(hints));
+      hints.ai_family=AF_INET;
+      hints.ai_socktype=SOCK_DGRAM;
+      if (getaddrinfo(hostname,NULL,&hints,&result) == 0)
+         {
+         for (entry=result;entry;entry=entry->ai_next)
+            {
+            struct sockaddr_in *ipv4=(struct sockaddr_in *)entry->ai_addr;
+            if ((ntohl(ipv4->sin_addr.s_addr)>>24) != 127)
+               {
+               inet_ntop(AF_INET,&ipv4->sin_addr,address,sizeof(address));
+               break;
+               }
+            }
+         freeaddrinfo(result);
+         }
+      }
+   WSACleanup();
+   return address;
+   }
+
+static bool ROTT_SameAddress(const struct sockaddr_in *a,
+   const struct sockaddr_in *b)
+   {
+   return (a->sin_family == b->sin_family) &&
+      (a->sin_port == b->sin_port) &&
+      (a->sin_addr.s_addr == b->sin_addr.s_addr);
+   }
+
+static int ROTT_FindPeer(const struct sockaddr_in *address)
+   {
+   int node;
+   for (node = 2; node <= MAXPLAYERS; node++)
+      if (udp_peer_active[node] && ROTT_SameAddress(&udp_peers[node],address))
+         return node;
+   return -1;
+   }
+
+static void ROTT_SendWelcome(const struct sockaddr_in *address,int node,
+   int players)
+   {
+   rott_udp_handshake_t reply;
+   memset(&reply,0,sizeof(reply));
+   reply.magic = ROTT_NET_MAGIC;
+   reply.type = ROTT_WELCOME;
+   reply.player = (unsigned char)node;
+   reply.players = (unsigned char)players;
+   sendto(udp_socket,(const char *)&reply,sizeof(reply),0,
+      (const struct sockaddr *)address,sizeof(*address));
+   }
+
+static void ROTT_SendOffer(SOCKET socket,const struct sockaddr_in *address,
+   int connected,int players)
+   {
+   rott_udp_handshake_t reply;
+   memset(&reply,0,sizeof(reply));
+   reply.magic = ROTT_NET_MAGIC;
+   reply.type = ROTT_OFFER;
+   reply.player = (unsigned char)connected;
+   reply.players = (unsigned char)players;
+   reply.reserved = (unsigned char)((GetCurrentProcessId()%255)+1);
+   sendto(socket,(const char *)&reply,sizeof(reply),0,
+      (const struct sockaddr *)address,sizeof(*address));
+   }
+
+int ROTT_DiscoverLanGames(rott_lan_game_t *games,int maxgames,int timeoutms)
+   {
+   WSADATA winsock;
+   SOCKET discoverySocket=INVALID_SOCKET;
+   struct sockaddr_in local;
+   struct sockaddr_in destination;
+   struct sockaddr_in from;
+   rott_udp_handshake_t message;
+   DWORD timeout=50;
+   DWORD started;
+   int broadcast=1;
+   int fromlen;
+   int received;
+   int count=0;
+   int i;
+
+   if (!games || maxgames<1 || timeoutms<1)
+      return 0;
+   if (WSAStartup(MAKEWORD(2,2),&winsock) != 0)
+      return 0;
+   discoverySocket=socket(AF_INET,SOCK_DGRAM,IPPROTO_UDP);
+   if (discoverySocket==INVALID_SOCKET)
+      goto done;
+   setsockopt(discoverySocket,SOL_SOCKET,SO_BROADCAST,(const char *)&broadcast,
+      sizeof(broadcast));
+   setsockopt(discoverySocket,SOL_SOCKET,SO_RCVTIMEO,(const char *)&timeout,
+      sizeof(timeout));
+   memset(&local,0,sizeof(local));
+   local.sin_family=AF_INET;
+   local.sin_addr.s_addr=htonl(INADDR_ANY);
+   local.sin_port=0;
+   if (bind(discoverySocket,(struct sockaddr *)&local,sizeof(local))==SOCKET_ERROR)
+      goto done;
+
+   memset(&message,0,sizeof(message));
+   message.magic=ROTT_NET_MAGIC;
+   message.type=ROTT_DISCOVER;
+   memset(&destination,0,sizeof(destination));
+   destination.sin_family=AF_INET;
+   destination.sin_port=htons(ROTT_DEFAULT_PORT);
+   destination.sin_addr.s_addr=htonl(INADDR_BROADCAST);
+   sendto(discoverySocket,(const char *)&message,sizeof(message),0,
+      (struct sockaddr *)&destination,sizeof(destination));
+   destination.sin_addr.s_addr=htonl(INADDR_LOOPBACK);
+   sendto(discoverySocket,(const char *)&message,sizeof(message),0,
+      (struct sockaddr *)&destination,sizeof(destination));
+
+   started=GetTickCount();
+   while ((int)(GetTickCount()-started)<timeoutms && count<maxgames)
+      {
+      char address[64];
+      bool duplicate=false;
+      int duplicateIndex=-1;
+      fromlen=sizeof(from);
+      received=recvfrom(discoverySocket,(char *)&message,sizeof(message),0,
+         (struct sockaddr *)&from,&fromlen);
+      if (received==SOCKET_ERROR)
+         {
+         int error=WSAGetLastError();
+         if (error==WSAETIMEDOUT || error==WSAEWOULDBLOCK ||
+             error==WSAECONNRESET)
+            continue;
+         break;
+         }
+      if (received!=sizeof(message) || message.magic!=ROTT_NET_MAGIC ||
+          message.type!=ROTT_OFFER)
+         continue;
+      if (!inet_ntop(AF_INET,&from.sin_addr,address,sizeof(address)))
+         continue;
+      for (i=0;i<count;i++)
+         if (!strcmp(games[i].address,address) ||
+             (message.reserved && games[i].id==message.reserved))
+            {
+            duplicate=true;
+            duplicateIndex=i;
+            }
+      if (duplicate)
+         {
+         /* The same local host may answer once as loopback and once through
+            its LAN adapter.  Keep one row and prefer the shareable address. */
+         if (duplicateIndex>=0 &&
+             !strcmp(games[duplicateIndex].address,"127.0.0.1") &&
+             strcmp(address,"127.0.0.1"))
+            {
+            strncpy(games[duplicateIndex].address,address,
+               sizeof(games[duplicateIndex].address)-1);
+            games[duplicateIndex].address[
+               sizeof(games[duplicateIndex].address)-1]='\0';
+            }
+         continue;
+         }
+      strncpy(games[count].address,address,sizeof(games[count].address)-1);
+      games[count].address[sizeof(games[count].address)-1]='\0';
+      games[count].connected=message.player;
+      games[count].players=message.players;
+      games[count].id=message.reserved;
+      count++;
+      }
+
+done:
+   if (discoverySocket!=INVALID_SOCKET)
+      closesocket(discoverySocket);
+   WSACleanup();
+   return count;
+   }
 
 static int ROTT_Port(void)
    {
@@ -164,26 +353,64 @@ static void ROTT_InitUDP(void)
    if (CheckParm("server"))
       {
       struct sockaddr_in from;
+      int connected = 0;
+      int expected = rottcom->numplayers - 1;
+      int node;
 
       udp_is_server = true;
-      printf("Waiting for a co-op player on UDP port %d...\n",port);
+      if ((rottcom->numplayers < 2) || (rottcom->numplayers > ROTT_COOP_MAX_PLAYERS))
+         Error("Co-op supports 2 to %d players.\n",ROTT_COOP_MAX_PLAYERS);
+      memset(udp_peer_active,0,sizeof(udp_peer_active));
+      {
+      DWORD timeout=100;
+      setsockopt(udp_socket,SOL_SOCKET,SO_RCVTIMEO,(const char *)&timeout,
+         sizeof(timeout));
+      }
+      printf("Waiting for %d co-op player%s on UDP port %d...\n",
+         expected,expected == 1 ? "" : "s",port);
       fflush(stdout);
-      do
+      while (connected < expected)
          {
          addrlen = sizeof(from);
          received = recvfrom(udp_socket,(char *)&message,sizeof(message),0,
             (struct sockaddr *)&from,&addrlen);
-         }
-      while ((received != sizeof(message)) ||
-         (message.magic != ROTT_NET_MAGIC) || (message.type != ROTT_HELLO));
+         if (received == SOCKET_ERROR)
+            {
+            int error=WSAGetLastError();
+            if ((error==WSAETIMEDOUT) || (error==WSAEWOULDBLOCK))
+               {
+               IN_PumpEvents();
+               continue;
+               }
+            Error("UDP host receive failed (%d).\n",error);
+            }
+         if ((received != sizeof(message)) ||
+             (message.magic != ROTT_NET_MAGIC))
+            continue;
 
-      udp_peer = from;
-      message.type = ROTT_WELCOME;
-      message.player = 2; /* raw ROTT node; fixed to player 1 by rt_net.c */
-      message.players = 2;
-      sendto(udp_socket,(const char *)&message,sizeof(message),0,
-         (struct sockaddr *)&udp_peer,sizeof(udp_peer));
-      printf("Co-op player connected.\n");
+         if (message.type==ROTT_DISCOVER)
+            {
+            ROTT_SendOffer(udp_socket,&from,connected+1,
+               rottcom->numplayers);
+            continue;
+            }
+         if (message.type != ROTT_HELLO)
+            continue;
+
+         node = ROTT_FindPeer(&from);
+         if (node < 0)
+            {
+            node = connected + 2;
+            udp_peers[node] = from;
+            udp_peer_active[node] = true;
+            connected++;
+            printf("Co-op player %d connected (%d/%d).\n",
+               node - 1,connected,expected);
+            fflush(stdout);
+            }
+         ROTT_SendWelcome(&from,node,rottcom->numplayers);
+         }
+      printf("All co-op players connected.\n");
       fflush(stdout);
       }
    else
@@ -214,11 +441,25 @@ static void ROTT_InitUDP(void)
       message.type = ROTT_HELLO;
       do
          {
+         IN_PumpEvents();
          sendto(udp_socket,(const char *)&message,sizeof(message),0,
             (struct sockaddr *)&udp_peer,sizeof(udp_peer));
          addrlen = sizeof(udp_peer);
          received = recvfrom(udp_socket,(char *)&message,sizeof(message),0,
             (struct sockaddr *)&udp_peer,&addrlen);
+         if (received == SOCKET_ERROR)
+            {
+            int error=WSAGetLastError();
+            if (error==WSAECONNRESET)
+               {
+               /* A localhost client can receive ICMP port-unreachable before
+                  the host has finished restarting.  Pace that like a normal
+                  receive timeout instead of exhausting every retry at once. */
+               I_Delay(5);
+               }
+            else if ((error!=WSAETIMEDOUT) && (error!=WSAEWOULDBLOCK))
+               Error("UDP client receive failed (%d).\n",error);
+            }
          attempts++;
          if (attempts >= 120)
             Error("Timed out connecting to the co-op host.\n");
@@ -240,6 +481,8 @@ static void ReadUDPPacket(void)
    struct sockaddr_in from;
    int fromlen = sizeof(from);
    int received;
+   int node;
+   rott_udp_handshake_t *handshake;
 
    rottcom->remotenode = -1;
    if (udp_loopback_ready)
@@ -251,6 +494,8 @@ static void ReadUDPPacket(void)
       return;
       }
 
+readAgain:
+   fromlen = sizeof(from);
    received = recvfrom(udp_socket,(char *)rottcom->data,MAXCOMBUFFERSIZE,0,
       (struct sockaddr *)&from,&fromlen);
    if (received == SOCKET_ERROR)
@@ -261,8 +506,36 @@ static void ReadUDPPacket(void)
       Error("UDP receive failed (%d).\n",error);
       }
 
+   if (udp_is_server && received == sizeof(rott_udp_handshake_t))
+      {
+      handshake = (rott_udp_handshake_t *)rottcom->data;
+      if ((handshake->magic == ROTT_NET_MAGIC) &&
+          (handshake->type == ROTT_DISCOVER))
+         {
+         ROTT_SendOffer(udp_socket,&from,rottcom->numplayers,
+            rottcom->numplayers);
+         goto readAgain;
+         }
+      if ((handshake->magic == ROTT_NET_MAGIC) &&
+          (handshake->type == ROTT_HELLO))
+         {
+         node = ROTT_FindPeer(&from);
+         if (node > 0)
+            ROTT_SendWelcome(&from,node,rottcom->numplayers);
+         goto readAgain;
+         }
+      }
+
    rottcom->datalength = (short)received;
-   rottcom->remotenode = udp_is_server ? 2 : 1;
+   if (udp_is_server)
+      {
+      node = ROTT_FindPeer(&from);
+      if (node < 0)
+         goto readAgain;
+      rottcom->remotenode = (short)node;
+      }
+   else
+      rottcom->remotenode = 1;
    }
 
 static void WriteUDPPacket(void)
@@ -275,11 +548,49 @@ static void WriteUDPPacket(void)
       return;
       }
 
+   if (udp_is_server)
+      {
+      int node = rottcom->remotenode;
+      if ((node < 2) || (node > MAXPLAYERS) || !udp_peer_active[node])
+         return;
+      if (sendto(udp_socket,(const char *)rottcom->data,rottcom->datalength,0,
+         (struct sockaddr *)&udp_peers[node],sizeof(udp_peers[node])) == SOCKET_ERROR)
+         Error("UDP send failed (%d).\n",WSAGetLastError());
+      return;
+      }
+
    if (sendto(udp_socket,(const char *)rottcom->data,rottcom->datalength,0,
       (struct sockaddr *)&udp_peer,sizeof(udp_peer)) == SOCKET_ERROR)
       Error("UDP send failed (%d).\n",WSAGetLastError());
    }
 
+void ROTT_ShutdownNetwork(void)
+   {
+   if (udp_socket != INVALID_SOCKET)
+      {
+      closesocket(udp_socket);
+      udp_socket=INVALID_SOCKET;
+      }
+   memset(udp_peer_active,0,sizeof(udp_peer_active));
+   udp_is_server=false;
+   udp_loopback_ready=false;
+   WSACleanup();
+   }
+
+#endif
+
+#ifndef PLATFORM_WIN32
+void ROTT_ShutdownNetwork(void)
+   {
+   }
+
+int ROTT_DiscoverLanGames(rott_lan_game_t *games,int maxgames,int timeoutms)
+   {
+   (void)games;
+   (void)maxgames;
+   (void)timeoutms;
+   return 0;
+   }
 #endif
 
 /*

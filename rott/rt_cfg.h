@@ -64,6 +64,7 @@ extern bool    advancedlighting;
 extern bool    advancedcoloredlights;
 extern bool    advancedlightflicker;
 extern bool    advanceddarkambient;
+extern bool    enhancedweapons;
 extern int     blanktime;
 extern char    CodeName[9];
 #ifdef DOS

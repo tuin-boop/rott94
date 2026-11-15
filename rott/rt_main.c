@@ -140,6 +140,8 @@ static byte *bptr;
 static bool turbo;
 
 static int NoWait;
+static bool NetworkStartupDeferred;
+static bool NetworkCoopSetupPending;
 static int startlevel=0;
 static int demonumber=-1;
 
@@ -157,6 +159,7 @@ void PlayTurboGame( void );
 void Init_Tables (void);
 void CheckRemoteRidicule ( int scancode );
 void SetRottScreenRes (int Width, int Height);
+static void DrawNetworkStartupScreen(void);
 
 #ifndef DOS
 extern void crash_print (int);
@@ -193,6 +196,51 @@ static void StartupMark (const char *stage)
 #else
 #define StartupMark(stage) ((void)0)
 #endif
+
+static void DrawNetworkStartupScreen(void)
+{
+   char line[128];
+   int netarg=CheckParm("net");
+   int playersarg=CheckParm("players");
+   int players=2;
+   bool hosting=CheckParm("server")!=0;
+
+   if (playersarg && playersarg+1<_argc)
+      players=atoi(_argv[playersarg+1]);
+
+   SetupMenuBuf();
+   SetAlternateMenuBuf();
+   ClearMenuBuf();
+   SetMenuTitle(hosting ? "HOST LAN GAME" : "JOIN LAN GAME");
+
+   if (tuinfont)
+      {
+      if (hosting)
+         {
+#ifdef PLATFORM_WIN32
+         snprintf(line,sizeof(line),"HOST ADDRESS: %s",ROTT_GetLanAddress());
+#else
+         snprintf(line,sizeof(line),"WAITING ON THE LOCAL NETWORK");
+#endif
+         DrawMenuBufFontString(28,58,line,tuinfont,235);
+         snprintf(line,sizeof(line),"WAITING FOR %d MORE PLAYER%s",
+            players-1,(players==2) ? "" : "S");
+         DrawMenuBufFontString(28,78,line,tuinfont,235);
+         DrawMenuBufFontString(28,102,
+            "FRIENDS: MULTIPLAYER / CO-OP > JOIN LAN GAME",tuinfont,235);
+         }
+      else
+         {
+         snprintf(line,sizeof(line),"CONNECTING TO: %s",
+            (netarg && netarg+1<_argc) ? _argv[netarg+1] : "HOST");
+         DrawMenuBufFontString(28,64,line,tuinfont,235);
+         DrawMenuBufFontString(28,86,"WAITING FOR THE HOST...",tuinfont,235);
+         }
+      DrawMenuBufFontString(28,126,"PLEASE WAIT",tuinfont,235);
+      }
+   FlipMenuBuf();
+   RefreshMenuBuf(0);
+}
 
 int main (int argc, char *argv[])
 {
@@ -284,15 +332,18 @@ int main (int argc, char *argv[])
 //   UL_ErrorStartup ();
 
    CheckCommandLineParameters();
+   StartupMark("command line parsed");
 
    // Start up Memory manager with a certain amount of reserved memory
 
    Z_Init(50000,1000000);
+   StartupMark("memory manager ready");
 
    IN_Startup ();
    StartupMark("input startup complete");
 
-   InitializeGameCommands();
+   if (!NetworkStartupDeferred)
+      InitializeGameCommands();
    if (standalone==false)
       {
       ReadConfig ();
@@ -428,14 +479,35 @@ int main (int argc, char *argv[])
       }
 #endif
 #endif
-   locplayerstate = &PLAYERSTATE[consoleplayer];
-
    if (standalone==true)
+      {
+      locplayerstate = &PLAYERSTATE[consoleplayer];
       ServerLoop();
+      }
 
    VL_SetVGAPlaneMode();
    StartupMark("video window created");
    VL_SetPalette(origpal);
+
+   if (NetworkStartupDeferred)
+      {
+      DrawNetworkStartupScreen();
+      InitROTTNET();
+      numplayers=rottcom->numplayers;
+      if (numplayers>MAXPLAYERS)
+         Error("Too many players.\n");
+      modemgame=true;
+      networkgame=(rottcom->gametype==NETWORK_GAME);
+      /* The waiting panel lives in the same small legacy level arena used by
+         network command buffers.  Free it first, matching the old working
+         startup order, or level loading can fail on a tiny final allocation. */
+      ShutdownMenuBuf();
+      InitializeGameCommands();
+      NetworkCoopSetupPending=true;
+      StartupMark("network players connected");
+      }
+
+   locplayerstate = &PLAYERSTATE[consoleplayer];
 
 //   SetTextMode();
 //   GraphicsMode();
@@ -457,9 +529,20 @@ int main (int argc, char *argv[])
 
 //   I_SetKeyboardLEDs( caps_lock, 0 );
 
-   gamestate.battlemode = battle_StandAloneGame;
+   if (NetworkCoopSetupPending)
+      {
+      gamestate.battlemode = battle_Coop;
+      COOPMODE = true;
+      BATTLEMODE = false;
+      }
+   else
+      {
+      gamestate.battlemode = battle_StandAloneGame;
+      COOPMODE = false;
+      BATTLEMODE = false;
+      }
 
-   BATTLE_SetOptions( &BATTLE_Options[ battle_StandAloneGame ] );
+   BATTLE_SetOptions( &BATTLE_Options[ gamestate.battlemode ] );
 
    /* Deterministic renderer regression path: play one of the shipped demos
       directly, without title/menu input.  This is command-line only and does
@@ -497,7 +580,15 @@ int main (int argc, char *argv[])
          }
       else if ( NoWait == false )
          {
+#ifdef DOS
          ApogeeTitle();
+#else
+         /* The original rotating Apogee logo writes directly through the
+            legacy 320x200 page layout.  That path is incompatible with the
+            modern Windows renderer and can terminate the program before the
+            main menu appears.  The regular title/menu sequence still runs in
+            GameLoop, so skip only this obsolete pre-menu logo on Windows. */
+#endif
          }
 #else
       if ( NoWait == false )
@@ -512,7 +603,9 @@ int main (int argc, char *argv[])
             MenuFadeOut();
             }
 //         ParticleIntro ();
+#ifdef DOS
          ApogeeTitle();
+#endif
          }
 #endif
       }
@@ -652,6 +745,7 @@ void CheckCommandLineParameters( void )
    timelimitenabled=false;
    noecho = false;
    quiet = false;
+   NetworkStartupDeferred=false;
 
    if (
         (CheckParm("?\0")) ||
@@ -838,23 +932,22 @@ void CheckCommandLineParameters( void )
          exit (0);
          break;
        case 11:
-         InitROTTNET();
-		   numplayers = rottcom->numplayers;
-         if (numplayers>MAXPLAYERS)
-            Error("Too many players.\n");
-         if (!quiet)
-	     printf("Playing %ld player ROTT\n",(long int)numplayers);
-         modemgame=true;
-         if (rottcom->gametype==NETWORK_GAME)
+         if (CheckParm("standalone"))
             {
-            if (!quiet)
-               printf("NETWORK GAME\n");
-            networkgame=true;
+            InitROTTNET();
+		      numplayers = rottcom->numplayers;
+            if (numplayers>MAXPLAYERS)
+               Error("Too many players.\n");
+            modemgame=true;
+            networkgame=(rottcom->gametype==NETWORK_GAME);
             }
          else
             {
-            if (!quiet)
-               printf("MODEM GAME\n");
+            /* Let SDL, the renderer, fonts, and menu assets start first.  The
+               handshake then has a responsive in-game waiting screen.  Keep
+               modemgame false until rottcom exists: the zone allocator asks
+               GamePacketSize() during early startup. */
+            NetworkStartupDeferred=true;
             }
          break;
        case 12:
@@ -1134,6 +1227,34 @@ void PlayTurboGame
 //
 //***************************************************************************
 
+static font_t *LoadExternalTuinFont(void)
+{
+   FILE *file;
+   long length;
+   byte *data;
+
+   file=fopen("tuinbaby.rotfont","rb");
+   if (!file)
+      return NULL;
+   fseek(file,0,SEEK_END);
+   length=ftell(file);
+   fseek(file,0,SEEK_SET);
+   if (length<770 || length>32767)
+      {
+      fclose(file);
+      return NULL;
+      }
+   data=(byte *)SafeMalloc((int)length);
+   if (fread(data,1,(size_t)length,file)!=(size_t)length)
+      {
+      fclose(file);
+      SafeFree(data);
+      return NULL;
+      }
+   fclose(file);
+   return (font_t *)data;
+}
+
 void Init_Tables (void)
 {
 	int i;
@@ -1176,6 +1297,8 @@ void Init_Tables (void)
 	// Cache in tiny font
 	shape = W_CacheLumpNum (W_GetNumForName ("tinyfont"), PU_STATIC, Cvt_font_t, 1);
 	tinyfont = (font_t *)shape;
+
+   tuinfont=LoadExternalTuinFont();
 
    intensitytable=W_CacheLumpNum(W_GetNumForName("menucmap"),PU_STATIC, CvtNull, 1);
    fontcolor = egacolor[4];
@@ -1366,7 +1489,55 @@ void GameLoop (void)
                   }
                NoWait = false;
                SwitchPalette(origpal,35);
-               CP_MainMenu();
+               if (NetworkCoopSetupPending)
+                  {
+                  /* A LAN host and its clients already agreed to a co-op
+                     session during the UDP handshake.  Sending them back to
+                     unrelated main menus let the host start a second session
+                     while the client was still waiting.  Enter the original
+                     synchronized player setup immediately on both sides. */
+                  NetworkCoopSetupPending=false;
+                  /* ex_titles calls BATTLE_Shutdown() immediately above,
+                     which clears COOPMODE.  Restore the negotiated mode here,
+                     immediately before the real player/level menus.  Without
+                     this the final color menu flips BATTLEMODE on and the host
+                     advertises DARKWAR.RTC instead of campaign DARKWAR.RTL. */
+                  gamestate.battlemode=battle_Coop;
+                  COOPMODE=true;
+                  BATTLEMODE=false;
+                  BATTLE_SetOptions(&BATTLE_Options[battle_Coop]);
+                  printf("Entering synchronized co-op setup as %s.\n",
+                     consoleplayer==0 ? "host" : "client");
+                  fflush(stdout);
+                  if (CheckParm("autocoopsetup"))
+                     {
+                     snprintf(locplayerstate->codename,
+                        sizeof(locplayerstate->codename),"PLAYER%d",
+                        consoleplayer+1);
+                     locplayerstate->player=consoleplayer%5;
+                     locplayerstate->uniformcolor=consoleplayer%MAXPLAYERCOLORS;
+                     gamestate.mapon=0;
+                     gamestate.teamplay=false;
+                     /* Match the state changes made by the final color menu
+                        so this path also catches co-op/deathmatch regressions. */
+                     BATTLEMODE=!COOPMODE;
+                     playstate=ex_resetgame;
+                     printf("Automatic co-op setup ready for synchronization "
+                        "(coop=%d battle=%d).\n",COOPMODE,BATTLEMODE);
+                     fflush(stdout);
+                     }
+                  else
+                     {
+                     SetupMenuBuf();
+                     SetUpControlPanel();
+                     EnableScreenStretch();
+                     BattleGamePlayerSetup();
+                     CleanUpControlPanel();
+                     ShutdownMenuBuf();
+                     }
+                  }
+               else
+                  CP_MainMenu();
 
                }
          break;
@@ -1390,12 +1561,20 @@ void GameLoop (void)
                if ( consoleplayer == 0 )
                   {
                   // Setup Master
+                  if (CheckParm("autocoopsetup"))
+                     { printf("Automatic host synchronization starting.\n"); fflush(stdout); }
                   SetupGameMaster();
+                  if (CheckParm("autocoopsetup"))
+                     { printf("Automatic host synchronization complete.\n"); fflush(stdout); }
                   }
                else
                   {
                   // Setup slave
+                  if (CheckParm("autocoopsetup"))
+                     { printf("Automatic client synchronization starting.\n"); fflush(stdout); }
                   SetupGamePlayer();
+                  if (CheckParm("autocoopsetup"))
+                     { printf("Automatic client synchronization complete.\n"); fflush(stdout); }
                   }
 
                if ( gamestate.Version < ROTTVERSION )
@@ -1446,10 +1625,25 @@ void GameLoop (void)
                {
                if ( !BATTLEMODE )
                   {
-                  PlayCinematic();
+                  if (CheckParm("autocoopsetup"))
+                     {
+                     /* Keep the network regression test deterministic and
+                        reach level loading immediately.  Normal games still
+                        play the campaign cinematic. */
+                     printf("Automatic co-op cinematic skipped.\n");
+                     fflush(stdout);
+                     }
+                  else
+                     PlayCinematic();
                   }
 
                SetupGameLevel();
+               if (CheckParm("autocoopsetup"))
+                  {
+                  printf("Automatic co-op setup loaded map %d successfully.\n",
+                     gamestate.mapon+1);
+                  fflush(stdout);
+                  }
                }
 
             IN_ClearKeyboardQueue();

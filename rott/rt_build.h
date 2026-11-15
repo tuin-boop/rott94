@@ -20,6 +20,8 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #ifndef _rt_build_public
 #define _rt_build_public
 
+#include "lumpy.h"
+
 //***************************************************************************
 //
 // RT_BUILD.C
@@ -50,6 +52,9 @@ void DrawTMenuBufPic (int x, int y, int shapenum);
 void EraseMenuBufRegion (int x, int y, int width, int height);
 
 void DrawMenuBufPropString (int px, int py, const char *string);
+void FillMenuBufRect (int x, int y, int width, int height, byte color);
+void DrawMenuBufFontString (int x, int y, const char *string,
+   font_t *font, byte color);
 void DrawTMenuBufPropString (int px, int py, const char *string);
 
 void DrawTMenuBufBox (int x, int y, int width, int height);

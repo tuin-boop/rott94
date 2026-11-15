@@ -370,5 +370,6 @@ void CheckForSyncCheck ( void );
 #endif
 
 int GamePacketSize( void );
+int GetTypeSize( int type );
 
 #endif

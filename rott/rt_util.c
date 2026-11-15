@@ -371,6 +371,23 @@ void Error (char *error, ...)
    vsprintf (&msgbuf[0], error, argptr);
 	va_end (argptr);
 
+   /* SDL builds do not have the DOS error screen, so preserve the actual
+      failure in redirected logs instead of exiting with only an area number. */
+   fprintf(stderr,"ROTT ERROR: %s\n",msgbuf);
+   fflush(stderr);
+   {
+   char errorlog[64];
+   FILE *logfile;
+   snprintf(errorlog,sizeof(errorlog),"rott-error-%lu.log",
+      (unsigned long)getpid());
+   logfile=fopen(errorlog,"a");
+   if (logfile)
+      {
+      fprintf(logfile,"%s\n",msgbuf);
+      fclose(logfile);
+      }
+   }
+
    scriptbuffer = &msgbuf[0];
 	size = strlen (msgbuf);
 

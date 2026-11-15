@@ -41,30 +41,18 @@ still contains pointer-sized assumptions that make its x64 build unreliable.
 
 ## Two computers on a LAN
 
-Build the small graphical launcher with:
+Put the registered `DARKWAR.WAD`, `DARKWAR.RTL`, and `REMOTE1.RTS` files in
+the build's `assets` folder on both computers, then run
+`Rott94.Windows.Release.exe` directly. The launcher has been retired.
 
-```powershell
-.\tools\CoopLauncher\build.ps1
-```
+The host chooses **MULTIPLAYER / CO-OP -> HOST LAN GAME** and selects the total
+number of players. Clients choose **JOIN LAN GAME**, select the host from the
+LAN list, or enter the host's IPv4 address manually. Allow the game through
+Windows Firewall on Private networks. No router port forwarding is required
+when all computers are on the same LAN.
 
-Place `Rott94CoopLauncher.exe` beside `Rott94.Windows.Release.exe` in the
-portable game folder on both computers. The host clicks **HOST** and gives the
-displayed LAN address to the second player, who enters it and clicks **JOIN**.
-If the portable folder has no registered data yet, the launcher imports the
-three required files from a default Ludicrous Edition Steam installation. It
-offers a folder picker when Steam is installed in another library location.
-Allow the game through Windows Firewall on Private networks. No router port
-forwarding is required when both computers are on the same LAN.
-
-The launcher creates a `diagnostics` folder beside the executable. It records
-game process starts and exit codes in `launcher-session.log`, and configures
-Windows to place full crash dumps in `diagnostics\crash-dumps`. If a LAN test
-crashes, preserve that folder from the affected computer for diagnosis.
-
-For the original single-player game, click **SINGLE PLAYER** in the same
-launcher. This also imports the registered data when needed, but starts the game
-without networking. Starting the bare game executable only works after an
-`assets` folder has already been imported.
+Single player is started from the normal **NEW GAME** menu in the same direct
+executable. Display, sound, and control settings are also configured in-game.
 
 ## Co-op controls
 
@@ -114,7 +102,7 @@ Debug output has no commercial `assets` folder of its own.
 
 ## Current prototype limits
 
-- Windows, direct-IP, and two players only.
+- Windows, direct-IP, and up to five players.
 - No room-code service or internet relay yet.
 - No join-in-progress yet.
 - Network compatibility with unmodified ROTT builds is not supported.
